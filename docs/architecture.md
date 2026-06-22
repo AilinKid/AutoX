@@ -2,7 +2,7 @@
 
 ## Boundary
 
-`auto-sql-opt` owns the decision workflow between observability data and a
+`AutoX` owns the decision workflow between observability data and a
 safe, verified optimization action. Clinic remains the production data plane;
 TiDB remains the source of truth for optimizer semantics.
 
@@ -111,7 +111,7 @@ inspection window + cluster metadata + raw query references
   + normalized metrics + slow SQL groups + TopSQL groups + collection errors
 ```
 
-The skill can then call `auto-sql-opt diagnose` for deeper SQL-specific
+The skill can then call `autox diagnose` for deeper SQL-specific
 analysis, while this repository remains independently testable.
 
 ## Case bundle

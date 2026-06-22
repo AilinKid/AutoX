@@ -29,7 +29,7 @@ func main() {
 
 	switch os.Args[1] {
 	case "doctor":
-		fmt.Printf("auto-sql-opt %s: core contracts are available; external adapters are not configured\n", version)
+		fmt.Printf("AutoX %s: core contracts are available; external adapters are not configured\n", version)
 	case "version":
 		fmt.Println(version)
 	default:
@@ -39,5 +39,5 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: auto-sql-opt <doctor|version>")
+	fmt.Fprintln(os.Stderr, "usage: autox <doctor|version>")
 }

@@ -18,7 +18,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/AilinKid/auto-sql-opt/internal/domain"
+	"github.com/AilinKid/AutoX/internal/domain"
 )
 
 type collectorStub struct{}

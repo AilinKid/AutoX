@@ -1,6 +1,6 @@
-# auto-sql-opt
+# AutoX
 
-`auto-sql-opt` is an optimizer-integrated diagnosis and remediation system for
+`AutoX` is an optimizer-integrated diagnosis and remediation system for
 TiDB SQL and cluster performance incidents.
 
 The project turns production evidence into reproducible optimizer experiments,
@@ -64,7 +64,7 @@ implemented.
 
 ## Repository layout
 
-- `cmd/auto-sql-opt`: CLI entrypoint.
+- `cmd/autox`: CLI entrypoint.
 - `internal/domain`: stable evidence, finding, recommendation, and safety
   models.
 - `internal/engine`: diagnosis orchestration contracts.
@@ -75,7 +75,7 @@ implemented.
 
 ```bash
 go test ./...
-go run ./cmd/auto-sql-opt doctor
+go run ./cmd/autox doctor
 ```
 
 The current bootstrap validates the core domain and orchestration contracts.
