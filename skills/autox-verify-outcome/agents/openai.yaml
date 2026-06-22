@@ -1,0 +1,4 @@
+interface:
+  display_name: "AutoX Verify Outcome"
+  short_description: "Measure implementation impact and decide rollback"
+  default_prompt: "Use $autox-verify-outcome to verify the production optimization result."

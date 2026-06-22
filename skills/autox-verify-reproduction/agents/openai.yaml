@@ -1,0 +1,4 @@
+interface:
+  display_name: "AutoX Verify Reproduction"
+  short_description: "Verify that local TiDB reproduces the production plan"
+  default_prompt: "Use $autox-verify-reproduction to verify the baseline plan reproduction."

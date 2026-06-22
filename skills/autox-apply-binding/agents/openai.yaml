@@ -1,0 +1,4 @@
+interface:
+  display_name: "AutoX Apply Binding"
+  short_description: "Safely prepare, apply, and roll back TiDB bindings"
+  default_prompt: "Use $autox-apply-binding to prepare and apply the approved TiDB binding safely."

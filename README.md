@@ -1,89 +1,64 @@
 # AutoX
 
-`AutoX` is a cloud-oriented, optimizer-integrated diagnosis and remediation system for
-TiDB SQL and cluster performance incidents.
+AutoX is a Skill-first repository for audited TiDB SQL diagnosis, optimizer
+reproduction, recommendation, implementation, and outcome verification.
 
-The project turns production evidence into reproducible optimizer experiments,
-then produces recommendations that are explainable, testable, and guarded by
-explicit safety policies. It is not a generic LLM wrapper around dashboards and
-slow logs.
+The repository deliberately does not implement a second optimizer or a
+standalone diagnosis service. Skills drive Clinic, local version-matched TiDB,
+TiDB source exploration, SQL experiments, and production verification.
 
-## Why this exists
-
-Existing clinic skills provide valuable cloud monitoring, slow-query, TopSQL,
-and health-inspection data. The missing layer is the engineering workflow after
-data collection:
-
-1. correlate SQL symptoms with cluster and optimizer evidence;
-2. reproduce plan selection against the matching TiDB version;
-3. generate binding, index, statistics, SQL rewrite, and cluster-level
-   candidates;
-4. validate candidates with optimizer and workload experiments;
-5. rank impact and risk;
-6. apply only reversible actions through explicit approval and rollback gates;
-7. retain the case as regression data.
-
-## Design principles
-
-- **Evidence before advice**: every finding links to source evidence.
-- **Optimizer as an oracle**: recommendations must be checked through TiDB plan
-  generation and costing, not only language-model reasoning.
-- **Version-aware**: diagnosis records the TiDB version and optimizer settings.
-- **Reproducible**: a case bundle should replay offline where data permits.
-- **Safe by default**: production mutation is disabled unless a policy,
-  approval, verification, and rollback plan all exist.
-- **Minimal trust in prose**: structured facts and experiment results drive
-  decisions; natural-language reports are views of those facts.
-
-## Initial architecture
+## Workflow
 
 ```text
-clinic / slow log / TopSQL / schema / stats / config
-                       |
-                       v
-               evidence normalization
-                       |
-                       v
-             diagnosis graph + hypotheses
-                       |
-             +---------+----------+
-             | optimizer lab      |
-             | plan reproduction   |
-             | candidate testing   |
-             +---------+----------+
-                       |
-                       v
-       ranked recommendations + safety assessment
-                       |
-              approval / apply / verify / rollback
+collect and sanitize context
+  -> prepare matching local TiDB
+  -> reproduce the production plan
+  -> explore optimizer behavior
+  -> compare candidates
+  -> recommend and approve
+  -> apply reversible change
+  -> verify outcome or roll back
+  -> archive audit record
 ```
 
-The first milestone is a read-only diagnosis pipeline. Automated production
-changes are intentionally deferred until validation and rollback contracts are
-implemented.
+The workflow is serial. All Skills read and update `.autox/current/`; callers
+do not pass a case identifier between stages. A `case_id` is generated once
+when the case starts and retained only for audit, recovery, and archive
+identity.
 
-## Repository layout
+## Skills
 
-- `cmd/autox`: CLI entrypoint.
-- `internal/domain`: stable evidence, finding, recommendation, and safety
-  models.
-- `internal/engine`: diagnosis orchestration contracts.
-- `docs/architecture.md`: component boundaries and integration model.
-- `docs/roadmap.md`: delivery milestones and acceptance criteria.
+- `autox-optimize-sql`: orchestrate the complete serial workflow.
+- `autox-sanitize-context`: sanitize schema, statistics, and cluster context.
+- `autox-prepare-lab`: prepare a TiDB environment matching production.
+- `autox-verify-reproduction`: prove whether the production plan is reproduced.
+- `autox-explore-sql`: inspect optimizer behavior and generate candidates.
+- `autox-compare-plans`: normalize and compare baseline and candidate plans.
+- `autox-apply-binding`: prepare, approve, apply, verify, and roll back bindings.
+- `autox-verify-outcome`: measure implementation impact.
+- `autox-audit-optimization`: maintain and archive the file-based audit trail.
 
-## Quick start
+## Local case data
 
-```bash
-go test ./...
-go run ./cmd/autox doctor
+Case data is sensitive and ignored by Git:
+
+```text
+.autox/current/
+├── manifest.yaml
+├── input/
+├── baseline/
+├── experiments/
+├── decision/
+├── outcome/
+└── audit.md
 ```
 
-The current bootstrap validates the core domain and orchestration contracts.
-Clinic and TiDB adapters will be added behind those contracts.
+Completed cases may be copied to `cases/<case_id>/`; `cases/` is also ignored
+except for its placeholder. Redact customer identifiers and SQL literals before
+sharing any case.
 
-## Non-goals
+## Safety boundary
 
-- replacing Clinic as the monitoring data plane;
-- issuing unverified `CREATE INDEX` or `CREATE BINDING` statements;
-- treating an LLM's explanation as proof;
-- maintaining a forked optimizer outside TiDB.
+Failure to reproduce the production plan blocks claims of validated
+optimization. Production mutation requires explicit approval, precondition
+checks, rollback SQL, and post-change verification.

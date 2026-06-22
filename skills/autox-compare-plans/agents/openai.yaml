@@ -1,0 +1,4 @@
+interface:
+  display_name: "AutoX Compare Plans"
+  short_description: "Compare baseline and candidate TiDB execution plans"
+  default_prompt: "Use $autox-compare-plans to compare the baseline and candidate plans."

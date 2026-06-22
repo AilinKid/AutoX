@@ -1,0 +1,4 @@
+interface:
+  display_name: "AutoX Explore SQL"
+  short_description: "Explore TiDB optimizer behavior and generate candidates"
+  default_prompt: "Use $autox-explore-sql to investigate this SQL and generate optimization candidates."

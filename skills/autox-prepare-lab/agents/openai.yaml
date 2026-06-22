@@ -1,0 +1,4 @@
+interface:
+  display_name: "AutoX Prepare Lab"
+  short_description: "Prepare a version-matched local TiDB optimizer lab"
+  default_prompt: "Use $autox-prepare-lab to prepare the local TiDB reproduction environment."

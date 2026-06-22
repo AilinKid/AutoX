@@ -1,4 +1,5 @@
-/bin/
-/dist/
-/.env
-/*.local.*
+.autox/
+.env
+*.local.*
+cases/*
+!cases/.gitkeep
