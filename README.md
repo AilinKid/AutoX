@@ -1,6 +1,6 @@
 # AutoX
 
-`AutoX` is an optimizer-integrated diagnosis and remediation system for
+`AutoX` is a cloud-oriented, optimizer-integrated diagnosis and remediation system for
 TiDB SQL and cluster performance incidents.
 
 The project turns production evidence into reproducible optimizer experiments,
