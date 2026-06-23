@@ -44,4 +44,4 @@ Read `../autox-optimize-sql/references/case-contract.md`.
    `audit.md`.
 12. Set `current_stage: candidates_generated`.
 
-Do not apply production changes in this Skill.
+Return candidates to `$autox-optimize-sql`. Do not apply production changes.

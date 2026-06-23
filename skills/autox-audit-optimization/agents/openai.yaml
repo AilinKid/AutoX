@@ -1,4 +1,0 @@
-interface:
-  display_name: "AutoX Audit Optimization"
-  short_description: "Maintain a complete file-based SQL optimization audit"
-  default_prompt: "Use $autox-audit-optimization to update and review the current optimization audit."

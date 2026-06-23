@@ -2,26 +2,27 @@
 
 ## Purpose
 
-Maintain a Skill-first, evidence-driven TiDB SQL diagnosis and remediation
-workflow.
+Maintain a small, read-only Skill workflow that takes a TiDB Cloud
+`cluster_id`, analyzes slow queries, and outputs optimization suggestions.
 
 ## Non-negotiables
 
-1. Keep the workflow serial through `.autox/current/manifest.yaml`.
-2. Generate `case_id` once; do not require it as a stage argument.
-3. Never recommend or execute a production mutation without evidence,
-   validation, risk classification, approval, and rollback instructions.
+1. Keep the first version read-only. Do not apply bindings, indexes,
+   configuration changes, or other production mutations.
+2. Require only `cluster_id`; treat time range, SQL digest, local TiDB, and
+   source checkout as optional inputs.
+3. Assume the execution environment is prepared externally. Do not build
+   environment provisioning into AutoX.
 4. Keep optimizer behavior version-aware. Do not assume current TiDB behavior
    applies to an older cluster.
 5. Do not invent Clinic or TiDB APIs. Verify contracts from source,
    documentation, or captured responses.
-6. Treat case data as sensitive and keep it out of Git unless explicitly
-   redacted.
-7. Keep Skill instructions concise and move detailed contracts into references.
+6. Distinguish observed evidence from inference and state missing evidence.
+7. Keep Skill instructions concise. Add structure only after real use proves it
+   necessary.
 
 ## Validation
 
 Run `quick_validate.py` for every changed Skill. Check for unresolved template
-markers and broken relative references. For workflow changes, dry-run the
-serial state transitions against a temporary `.autox/current/` case without
-touching production.
+markers and broken Skill references. Verify the workflow never requires case
+state, environment creation, or production mutation.

@@ -1,4 +1,0 @@
-interface:
-  display_name: "AutoX Sanitize Context"
-  short_description: "Sanitize TiDB schema and statistics for local replay"
-  default_prompt: "Use $autox-sanitize-context to prepare sanitized schema and statistics."

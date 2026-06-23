@@ -1,4 +1,4 @@
 interface:
   display_name: "AutoX Optimize SQL"
-  short_description: "Run the complete audited TiDB SQL optimization flow"
-  default_prompt: "Use $autox-optimize-sql to diagnose and optimize this TiDB SQL case."
+  short_description: "Analyze cluster slow SQL and recommend optimizations"
+  default_prompt: "Use $autox-optimize-sql to analyze slow queries for this TiDB cluster_id and return suggestions."
