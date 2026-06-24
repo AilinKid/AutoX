@@ -607,6 +607,13 @@ def write_output(payload: dict[str, Any], output: str | None) -> None:
         sys.stdout.write(text)
 
 
+def write_collection_error(exc: Exception, output: str | None) -> None:
+    payload = {"errors": [{"area": "collection", "error": str(exc)}]}
+    write_output(payload, output)
+    if output:
+        print(f"collection failed; wrote error JSON to {output}: {exc}", file=sys.stderr)
+
+
 def main() -> int:
     args = parse_args()
     try:
@@ -666,7 +673,7 @@ def main() -> int:
         write_output(payload, args.output)
         return 0
     except (CollectionError, RuntimeError) as exc:
-        write_output({"errors": [{"area": "collection", "error": str(exc)}]}, args.output)
+        write_collection_error(exc, args.output)
         return 1
 
 

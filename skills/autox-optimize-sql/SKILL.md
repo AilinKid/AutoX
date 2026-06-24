@@ -1676,6 +1676,15 @@ Do not claim runtime improvement from local static `EXPLAIN` alone.
 Include one primary recommendation. Add optional stricter or alternative
 candidates only when they are useful and clearly labeled.
 
+Do not output concrete hint SQL, Binding SQL, or Index DDL as the primary
+recommendation unless static `EXPLAIN`, `EXPLAIN EXPLORE`, production-safe
+`EXPLAIN`, or stronger evidence has verified that the candidate produces the
+intended plan shape. If a hint idea has not been verified, or if local
+validation cannot reproduce the production plan, report it only as a validation
+direction and write `none` for candidate SQL. If a tested hint is accepted by
+TiDB but produces an unsafe or materially worse plan shape, explicitly report
+that it was rejected and do not include it as a candidate for rollout.
+
 ```text
 Primary recommendation:
 <recommended reviewed action>
@@ -1763,6 +1772,8 @@ The Clinic collection script:
     same digest when Slow Query does not show enough plan diversity.
 12. Preserve API errors explicitly.
 13. Output structured JSON for this Skill.
+14. When `--output` is provided and collection fails, write the error JSON to
+    that file and print a concise stderr message that names the output path.
 
 Run `scripts/collect_tidb_http_table.py` when the user provides a reachable
 TiDB status HTTP endpoint and table identity. It collects table schema and
@@ -1808,6 +1819,16 @@ Local validation workflow:
 
 4. Execute the generated DDL locally.
 5. Execute `LOAD STATS '<stats-json-file>'` locally for each involved table.
+   When using the MySQL client to load a local stats JSON file, enable local
+   infile support, for example:
+
+   ```bash
+   mysql --local-infile=1 ... -e "LOAD STATS '/path/to/stats.json';"
+   ```
+
+   If the client returns `LOAD DATA LOCAL INFILE file request rejected`, treat
+   it as a client-side local infile restriction and retry with
+   `--local-infile=1`; do not misreport it as a TiDB `LOAD STATS` rejection.
 6. Run baseline `EXPLAIN <sql>`.
 7. Create hypothetical indexes locally and run candidate `EXPLAIN <sql>`.
 8. When evaluating MPP, set hypothetical TiFlash replicas locally and run
