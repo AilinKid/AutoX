@@ -759,6 +759,20 @@ root requirement down to the access path that supplies order. Do not assume the
 order supplier is adjacent to `Limit`, `TopN`, or `Selection`; order can be
 passed through several physical operators.
 
+For `ORDER BY` / `LIMIT` / `TopN` / `keep order:true`, answer these questions
+in order:
+
+1. Is the current plan choosing a weakly selective index mainly because it
+   preserves order?
+2. How many rows does the ordered index or table scan read, and how many rows
+   remain after the filter or residual `Selection`?
+3. Does `LIMIT` early shutdown fail because qualifying rows are sparse or
+   clustered unfavorably in the ordered path?
+4. Would a more selective filter index plus explicit `Sort` or `TopN` read less
+   data overall?
+5. Is a composite index needed to satisfy both the selective filters and the
+   required ordering?
+
 Answer:
 
 - Is ordering produced by an explicit `Sort` or `TopN`, or naturally supplied by
