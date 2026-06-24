@@ -1531,296 +1531,185 @@ Index not recommended.
 
 # Phase 7: Produce the final report
 
-Use this exact top-level structure.
+Use exactly four top-level sections in the final report:
 
-Every recommendation must include provenance:
+1. `Conclusion`
+2. `Evidence`
+3. `Local Validation`
+4. `Recommendation`
+
+Write the report as a factual diagnosis, not a process log. Do not use
+first-person self-narration such as "I tried", "I later found", or "the previous
+direction was wrong". Do not add separate `Not Recommended` or
+`Missing Evidence` sections. Put caveats, risks, and missing production
+validation inside `Recommendation`.
+
+Every recommendation must include provenance inside the `Recommendation`
+section:
 
 ```text
-Recommendation source:
-history plan / local tidb env / skill inference / production evidence
-Strategy:
-history plan cmp / skill infer / plan explore
+Provenance:
+- Recommendation source: history plan / local tidb env / skill inference / production evidence
+- Strategy: history plan cmp / skill infer / plan explore
+- Validation status: production verified / locally verified by EXPLAIN / locally explored by EXPLAIN EXPLORE / partially verified / inferred
+- Production safety: review only; AutoX did not execute binding, create indexes, modify TiFlash replicas, or change production settings.
 ```
 
 Use:
 
 - `history plan cmp` when the recommendation comes from comparing existing good
   and bad historical plans;
-- `skill infer` when the recommendation comes from manual/skill bottleneck
-  analysis, optionally validated by local hypothetical index or hypothetical
-  TiFlash `EXPLAIN`;
+- `skill infer` when the recommendation comes from bottleneck analysis,
+  optionally validated by local hypothetical index or hypothetical TiFlash
+  `EXPLAIN`;
 - `plan explore` when the recommendation comes from local `EXPLAIN EXPLORE`.
 
-## Cluster and query context
-
-Include:
-
-- cluster ID;
-- cluster name;
-- TiDB version;
-- business timezone;
-- business inspection range;
-- UTC Clinic query range;
-- target digest;
-- representative SQL.
-
-## Problem summary
-
-Include:
-
-- observed symptoms;
-- Slow Query evidence;
-- TopSQL evidence;
-- plan variation;
-- historical plan comparison;
-- bottleneck analysis;
-- cardinality estimation findings;
-- likely root cause;
-- missing evidence.
-
-## Historical plan comparison
+## 1. Conclusion
 
 Include:
 
 ```text
-Plan variants:
-- plan_digest / normalized fingerprint:
-  source: Slow Query / statement summary / TopSQL / inferred
-  exec count:
-  avg / p95 / max latency:
-  slow-query count:
-  representative plan:
-  join order:
-  table access summary:
-  dominant cost:
-  verdict: good / bad / inconclusive
+Recommended action:
+Binding first / Index first / TiFlash or MPP validation first / Plan explore
+candidate first / Fix statistics first / Investigate non-optimizer bottleneck /
+More evidence is required
 
-Best known historical plan:
-Why it is better:
-Whether all executions are slow:
-Whether plan stabilization is applicable:
-Recommendation source:
-history plan
-Strategy:
-history plan cmp
-Missing evidence:
+Recommended plan shape:
+- <alias/table>: <expected storage path and index/table access>
+- <join>: <expected join type and build/probe behavior>
+
+Why:
+<one short paragraph that names the main mechanism>
 ```
 
-## Bottleneck analysis
-
-Include:
+For a historical hybrid TiFlash plan, state the exact per-alias shape. Example:
 
 ```text
-Dominant bottleneck:
-Join-related: yes / no / unknown
-
-If join-related:
-  logical join order:
-  base-table estimate quality:
-  physical join type:
-  build/probe side:
-  outer rows:
-  probe task / cop request count:
-  probe-side access path:
-  probe-side keys / bytes / read time:
-  amplification mechanism:
-
-If single-table or access-path-related:
-  current access path:
-  access conditions:
-  residual filters:
-  why filters are not index access:
-  existing useful indexes:
-  lookup amplification:
-  IndexMerge applicability:
-
-If order-sensitive:
-  order requirement:
-  explicit Sort/TopN or natural access order:
-  order supplier:
-  order-preservation chain:
-  ordered-path rows / bytes before filter:
-  rows after filter:
-  LIMIT early-shutdown effectiveness:
-  filter-index alternative:
-  composite filter+order index applicability:
-
-Low-level bottleneck model:
-  large data volume / many cop requests and seeks / both / unknown
-
-TiFlash or MPP applicability:
-  available / not available / unknown
-  topology evidence:
-  table replica evidence:
-  likely helpful / not helpful / needs validation
+Recommended plan shape:
+- a = dh_user_day_report: TiKV index access on udx_ymd_currency_user_site(...)
+- p = dh_account_ext_parentinfo: TiFlash scan with pushed filter p.site_code = ?
+- a LEFT JOIN p: HashJoin
+- c = dh_account_basic: TiKV covering index access on idx_uidx_sc_uname_rgid(...)
 ```
 
-## Binding recommendation
+## 2. Evidence
 
-Include:
+Always include these fixed evidence blocks. Fill unknown fields with
+`unknown` or `unavailable`; do not drop the field.
 
 ```text
-Conclusion:
-Recommended / Not recommended
+Cluster and SQL:
+- Cluster:
+- TiDB version:
+- Deployment type:
+- Digest:
+- SQL:
 
-Candidate hint:
-Candidate Binding SQL:
+Current slow plan:
+- Main bottleneck:
+- Slow operator:
+- Probe side:
+- Process keys:
+- Total keys:
+- Cop tasks:
+- Query time:
+- Plan digest:
 
-Reason:
-Current plan:
-Expected plan:
-Expected benefit:
+Best historical plan:
+- Plan source:
+- Query time:
+- Plan digest:
+- Key difference:
 
-Validation status:
-Verified / Locally verified by EXPLAIN / Locally explored by EXPLAIN EXPLORE /
-Partially verified / Inferred
-Validation source:
-Production / local tidb env / historical plan / inferred only
-Strategy:
-history plan cmp / skill infer / plan explore
+TiFlash availability:
+- Cluster has TiFlash nodes:
+- Involved tables have TiFlash replicas:
 
-Applicable parameter range:
-Risks:
-Missing evidence:
+Interpretation:
+<one short paragraph; for example, replica exists so the issue is plan selection,
+not missing replica>
 ```
 
-Do not emit executable-looking Binding SQL without the warning:
+If no good historical plan exists, replace `Best historical plan` with the most
+relevant bottleneck evidence from Step 3.6 but keep the block title and set:
+
+```text
+Best historical plan:
+- Plan source: unavailable
+- Query time: unavailable
+- Plan digest: unavailable
+- Key difference: no better historical plan found; recommendation is based on
+  bottleneck analysis / local validation / plan explore.
+```
+
+## 3. Local Validation
+
+Include local validation only when it was actually run. If it was not run, keep
+this section short and state `Not run`.
+
+```text
+Validation environment:
+- TiDB version:
+- Schema source:
+- Stats source:
+- Validation type: local static EXPLAIN / EXPLAIN EXPLORE / not run
+
+Validated candidate:
+<hint, hypothetical index, hypothetical TiFlash shape, or explored candidate>
+
+Observed local plan shape:
+- <alias/operator>: <observed path>
+
+Validation result:
+Locally verified by EXPLAIN / Locally explored by EXPLAIN EXPLORE / Inferred /
+Not verified / Not run
+
+Validation limitation:
+Local EXPLAIN verifies optimizer plan shape only. It does not prove runtime
+improvement unless representative local execution data exists.
+```
+
+Do not claim runtime improvement from local static `EXPLAIN` alone.
+
+## 4. Recommendation
+
+Include one primary recommendation. Add optional stricter or alternative
+candidates only when they are useful and clearly labeled.
+
+```text
+Primary recommendation:
+<recommended reviewed action>
+
+Candidate hint / Binding SQL / Index DDL:
+<review-only SQL or none>
+
+Optional stricter candidate:
+<review-only SQL or none>
+
+Caveats:
+- <parameter scope, partial optimization scope, missing production EXPLAIN, or
+  why not to use all-in TiFlash/add replica/new index as the first action>
+
+Provenance:
+- Recommendation source:
+- Strategy:
+- Validation status:
+- Production safety:
+```
+
+Any executable-looking SQL must be labeled:
 
 ```text
 Review only. Not executed by AutoX.
 ```
 
-## Index recommendation
+For TiFlash recommendations, avoid separate "not recommended" blocks. Put
+negative guidance in `Caveats`, for example:
 
-Include:
-
-```text
-Conclusion:
-Recommended / Not recommended
-
-Candidate index:
-CREATE INDEX ...
-
-Predicate/index mapping:
-Existing-index relationship:
-Expected plan change:
-Expected scan reduction:
-Optimization scope:
-Broad / Partial / Workload-dependent
-Workload-wide value:
-
-Validation status:
-Verified / Locally verified by EXPLAIN / Locally explored by EXPLAIN EXPLORE /
-Partially verified / Inferred
-Validation source:
-Production / local tidb env / historical plan / inferred only
-Strategy:
-history plan cmp / skill infer / plan explore
-
-Write cost:
-Storage cost:
-Risks:
-Missing evidence:
-```
-
-Do not emit executable-looking DDL without the warning:
-
-```text
-Review only. Not executed by AutoX.
-```
-
-## TiFlash / MPP recommendation
-
-Include when bottleneck analysis or local validation suggests MPP may be a
-better direction than TiKV index access.
-
-```text
-Conclusion:
-Recommended / Not recommended / Needs production-safe validation
-
-Current TiFlash evidence:
-Cluster has TiFlash nodes: yes / no / unknown
-Tables have TiFlash replicas: yes / no / unknown
-Historical MPP plan exists: yes / no / unknown
-
-Candidate MPP plan:
-Expected mechanism:
-Expected benefit:
-
-Local validation:
-Hypo TiFlash used: yes / no
-Validation status:
-Locally verified by EXPLAIN / Inferred / Not verified
-Validation source:
-local tidb env / production-safe EXPLAIN requested / inferred only
-Strategy:
-skill infer / plan explore
-
-Operational action:
-Add TiFlash capacity / add table replicas / test reviewed hints or settings /
-no action
-
-Risks:
-Missing evidence:
-```
-
-Do not present TiFlash or MPP as verified when local hypothetical TiFlash did not
-produce the expected MPP plan. If production already has TiFlash replicas but
-the optimizer does not choose them, state that local validation could not verify
-the plan and ask for production-safe `EXPLAIN` validation.
-
-## Plan Explore recommendation
-
-Include only when local `EXPLAIN EXPLORE` was used.
-
-```text
-Conclusion:
-Recommended / Not recommended / No better explored plan found
-
-Why plan explore was used:
-No good historical plan / no convincing index idea / no convincing TiFlash idea
-
-Local validation:
-Command:
-EXPLAIN EXPLORE <sql>
-Validation status:
-Locally explored by EXPLAIN EXPLORE / No useful candidate / Failed
-Validation source:
-local tidb env
-Strategy:
-plan explore
-
-Best explored candidate:
-Plan digest:
-Candidate plan:
-Candidate hint or binding SQL:
-Expected mechanism:
-Expected benefit:
-
-Risks:
-Missing evidence:
-```
-
-Do not emit executable-looking Binding SQL from `EXPLAIN EXPLORE` without the
-warning:
-
-```text
-Review only. Not executed by AutoX.
-```
-
-## Final priority
-
-Choose one:
-
-- Binding first, Index later.
-- Index first.
-- TiFlash / MPP validation first.
-- Plan explore candidate first.
-- Fix statistics first; neither Binding nor Index is currently recommended.
-- Investigate non-optimizer bottleneck; neither is currently recommended.
-- More evidence is required.
-
-Explain the priority in one short paragraph.
+- do not use all-in TiFlash as evidence for a p-only historical hybrid plan;
+- do not recommend adding TiFlash replicas when replicas already exist;
+- do not choose a new index as the first action when a better historical plan is
+  available and locally reproducible.
 
 # Phase 8: Edge cases
 
