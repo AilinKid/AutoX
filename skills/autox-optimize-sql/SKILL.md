@@ -354,6 +354,66 @@ For each important plan variant, compare:
 If one plan is consistently better, treat plan stabilization as a potential
 Binding use case.
 
+## Step 2.6: Historical plan comparison
+
+Before generating new Binding or Index ideas, answer:
+
+```text
+Are all executions slow, or only some plan shapes / parameter shapes slow?
+```
+
+Slow Query is biased toward slow executions. A better plan may be faster and
+therefore absent from Slow Query. When Slow Query does not show enough plan
+diversity, also inspect statement summary and TopSQL data exposed through Clinic
+Data Proxy, after checking the available schema.
+
+For the target digest, group executions by plan digest or normalized plan
+fingerprint and compare:
+
+- execution count and slow-query count;
+- average, p95, and maximum latency when available;
+- total duration or CPU contribution;
+- representative SQL parameters or tenant/table suffixes when visible;
+- plan tree shape;
+- logical join order and physical join algorithm;
+- build/probe side and outer-row count;
+- first access table or driving table;
+- access path for every table;
+- pushed-down predicates and residual `Selection`;
+- estimated rows and actual rows where `EXPLAIN ANALYZE` evidence exists;
+- processed keys, total keys, scan bytes, read bytes, and memory/disk.
+
+For every important variant, explain why it is better or worse. Useful signals
+include:
+
+- a better logical join order caused by different base-table cardinality
+  estimates;
+- more tables using their own selective access conditions before joining;
+- avoiding a large outer side that drives many IndexJoin probes;
+- avoiding lookup or probe amplification;
+- effective TiFlash MPP full scan when a table has no useful access predicate
+  and the scan is small enough or well-pruned;
+- lower processed keys per returned row;
+- lower actual latency under comparable parameters.
+
+If an existing historical plan is materially better, prefer it as the first
+candidate for stabilization. Derive Binding or hint candidates from that known
+plan shape before inventing a new plan.
+
+If the better plan appears only in statement summary or TopSQL and lacks full
+runtime plan details, mark the comparison as `inferred` and list the missing
+evidence. Do not claim it is verified until a representative plan and runtime
+evidence are available.
+
+Example judgment:
+
+- Bad shape: a large filtered table becomes the outer input, causing many
+  IndexJoin probe tasks and high KV read time.
+- Better historical shape: the table with no useful access predicate is chosen
+  first and read through TiFlash MPP, while the other tables still use their own
+  index access conditions. This can reduce outer-row probe amplification and be
+  a better plan both logically and in observed runtime.
+
 # Phase 3: Collect diagnostic evidence
 
 ## Step 3.1: Analyze Slow Query execution details
@@ -702,6 +762,8 @@ both be inappropriate.
 Binding is appropriate when:
 
 - a known better plan already exists;
+- historical plan comparison finds a materially better plan shape for the same
+  digest;
 - the SQL has a clear plan regression;
 - the optimizer intermittently chooses a bad index;
 - join order or join algorithm is demonstrably wrong;
@@ -734,6 +796,8 @@ Possible candidates include:
 - `HASH_JOIN`;
 - `INL_JOIN`;
 - join order hints;
+- storage-engine hints when the better historical plan intentionally uses TiKV
+  or TiFlash for a specific table and the target TiDB version supports the hint;
 - other target-version-supported TiDB optimizer hints.
 
 Verify hint names and Binding syntax against the matching TiDB version or source
@@ -765,12 +829,13 @@ A lower estimated cost alone is not validation.
 Rank candidates by:
 
 1. root-cause fit;
-2. available evidence;
-3. local validation;
-4. expected benefit;
-5. parameter coverage;
-6. regression risk;
-7. reversibility.
+2. whether the candidate reproduces a known better historical plan;
+3. available evidence;
+4. local validation;
+5. expected benefit;
+6. parameter coverage;
+7. regression risk;
+8. reversibility.
 
 Generate Binding SQL for review only.
 
@@ -930,9 +995,34 @@ Include:
 - Slow Query evidence;
 - TopSQL evidence;
 - plan variation;
+- historical plan comparison;
 - cardinality estimation findings;
 - likely root cause;
 - missing evidence.
+
+## Historical plan comparison
+
+Include:
+
+```text
+Plan variants:
+- plan_digest / normalized fingerprint:
+  source: Slow Query / statement summary / TopSQL / inferred
+  exec count:
+  avg / p95 / max latency:
+  slow-query count:
+  representative plan:
+  join order:
+  table access summary:
+  dominant cost:
+  verdict: good / bad / inconclusive
+
+Best known historical plan:
+Why it is better:
+Whether all executions are slow:
+Whether plan stabilization is applicable:
+Missing evidence:
+```
 
 ## Binding recommendation
 
@@ -1025,6 +1115,8 @@ Explain the priority in one short paragraph.
 | Pseudo stats detected | Explain its effect on estimates |
 | TopSQL unavailable | Mark workload-wide impact unknown |
 | Multiple plan digests | Analyze the important variants separately |
+| Only slow plans found in Slow Query | Check statement summary or TopSQL before concluding no better historical plan exists |
+| Better plan appears only outside Slow Query | Mark historical comparison inferred until representative plan/runtime evidence is collected |
 | Local TiDB unavailable | Mark candidates inferred |
 | Local TiDB version mismatch | Treat results as advisory only |
 | Root cause is non-optimizer | Binding and Index may both be not recommended |
@@ -1048,8 +1140,10 @@ The Clinic collection script:
 8. Query digest aggregates.
 9. Query representative Slow Query executions.
 10. Query TopSQL for the same digest.
-11. Preserve API errors explicitly.
-12. Output structured JSON for this Skill.
+11. Query statement summary or other available plan-variant sources for the
+    same digest when Slow Query does not show enough plan diversity.
+12. Preserve API errors explicitly.
+13. Output structured JSON for this Skill.
 
 Run `scripts/collect_tidb_http_table.py` when the user provides a reachable
 TiDB status HTTP endpoint and table identity. It collects table schema and
