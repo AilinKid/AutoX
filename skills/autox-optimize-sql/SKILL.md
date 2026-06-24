@@ -390,7 +390,36 @@ an optimizer access-path problem.
 
 Identify all tables referenced by the target SQL and execution plan.
 
-For every relevant table, obtain:
+Preferred read-only source: if any TiDB status HTTP endpoint is reachable,
+fetch table schema through TiDB HTTP API:
+
+```text
+GET http://<tidb-ip>:10080/schema/<db>/<table>
+```
+
+The default TiDB status port is `10080`; clusters may configure a different
+status port.
+
+For Dedicated TiDB Cloud clusters, prefer the Dashboard debug_api proxy when
+direct TiDB status HTTP access is unavailable or requires cluster TLS:
+
+```text
+GET  /debug_api/endpoints
+GET  /topology/tidb
+POST /debug_api/endpoint
+GET  /debug_api/download?token=<token>
+```
+
+Use only the read-only endpoint ID `tidb_schema_by_table`. The POST above only
+asks the Dashboard proxy to call a read-only TiDB status API and prepare a
+download token; do not use mutation endpoint IDs.
+
+Do not use Dashboard debug_api proxy for Premium, Starter, Essential, shared,
+or unknown deployment types. Report it as unavailable and use other read-only
+evidence sources.
+
+If TiDB HTTP API is unavailable but a prepared read-only SQL connection exists,
+obtain:
 
 ```sql
 SHOW CREATE TABLE <qualified_table>;
@@ -417,8 +446,28 @@ If schema cannot be obtained:
 
 ## Step 3.3: Obtain statistics
 
-Obtain the statistics JSON for the involved tables from the prepared
-environment or available diagnostic source.
+Preferred read-only source: if any TiDB status HTTP endpoint is reachable,
+fetch statistics JSON through TiDB HTTP API:
+
+```text
+GET http://<tidb-ip>:10080/stats/dump/<db>/<table>
+GET http://<tidb-ip>:10080/stats/dump/<db>/<table>/<yyyyMMddHHmmss>
+GET http://<tidb-ip>:10080/stats/dump/<db>/<table>/<yyyy-MM-dd HH:mm:ss>
+```
+
+For Dedicated TiDB Cloud clusters, prefer the Dashboard debug_api proxy when
+direct TiDB status HTTP access is unavailable or requires cluster TLS. Use only
+these read-only endpoint IDs:
+
+- `tidb_stats_by_table`
+- `tidb_stats_by_table_timestamp`
+
+Do not use Dashboard debug_api proxy for Premium, Starter, Essential, shared,
+or unknown deployment types.
+
+Otherwise, obtain the statistics JSON for the involved tables from a
+plan_replayer artifact, prepared replay environment, or other available
+diagnostic source.
 
 Use statistics metadata or metrics only as supporting evidence.
 
@@ -945,7 +994,7 @@ Explain the priority in one short paragraph.
 Run `scripts/collect_slow_sql.py` for deterministic Clinic collection. Reuse
 this bundled script instead of generating temporary Python collectors.
 
-The script:
+The Clinic collection script:
 
 1. Import and reuse `clinic-api/scripts/clinic_api.py`.
 2. Validate Clinic authentication.
@@ -959,6 +1008,74 @@ The script:
 10. Query TopSQL for the same digest.
 11. Preserve API errors explicitly.
 12. Output structured JSON for this Skill.
+
+Run `scripts/collect_tidb_http_table.py` when the user provides a reachable
+TiDB status HTTP endpoint and table identity. It collects table schema and
+statistics through documented TiDB HTTP `GET` APIs only.
+
+Example:
+
+```bash
+python3 scripts/collect_tidb_http_table.py \
+  --tidb-http "http://<tidb-ip>:10080" \
+  --db "<db>" \
+  --table "<table>"
+```
+
+For historical statistics accepted by the TiDB HTTP API:
+
+```bash
+python3 scripts/collect_tidb_http_table.py \
+  --tidb-http "http://<tidb-ip>:10080" \
+  --db "<db>" \
+  --table "<table>" \
+  --stats-time "2026-06-23 15:30:00"
+```
+
+This script must not issue `POST`, connect through the MySQL SQL protocol, or
+call mutating TiDB HTTP endpoints.
+
+Run `scripts/collect_dashboard_debug_api_table.py` for Dedicated TiDB Cloud
+clusters when Clinic Dashboard can access the TiDB status endpoint but the
+agent cannot access it directly. Do not use it for Premium, Starter,
+Essential, shared, or unknown deployment types. It follows the Dashboard UI
+flow:
+
+1. resolve `org_id` from Clinic metadata when not provided;
+2. verify the cluster deployment type is `dedicated`;
+3. call Dashboard proxy `GET /debug_api/endpoints`;
+4. call Dashboard proxy `GET /topology/tidb`;
+5. choose an Up TiDB `ip:status_port` from topology;
+6. call Dashboard proxy `POST /debug_api/endpoint` only for read-only endpoint
+   IDs;
+7. download the generated JSON through `GET /debug_api/download?token=...`.
+
+Example:
+
+```bash
+python3 scripts/collect_dashboard_debug_api_table.py \
+  --cluster-id <cluster_id> \
+  --db "<db>" \
+  --table "<table>" \
+  --output-dir /tmp
+```
+
+If the Dashboard URL already contains `orgId`, pass it explicitly:
+
+```bash
+python3 scripts/collect_dashboard_debug_api_table.py \
+  --org-id <dashboard_org_id> \
+  --cluster-id <cluster_id> \
+  --db "<db>" \
+  --table "<table>"
+```
+
+The Dashboard proxy script must not use debug_api mutation endpoints. Allowed
+endpoint IDs are:
+
+- `tidb_schema_by_table`
+- `tidb_stats_by_table`
+- `tidb_stats_by_table_timestamp`
 
 Suggested interface:
 
