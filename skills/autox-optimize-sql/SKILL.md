@@ -39,18 +39,28 @@ then use these sub-skills:
 Use the scripts and Python client supplied by `clinic-api`. Do not copy Clinic
 authentication or API implementation into AutoX.
 
-## External environment
+## External and local validation environment
 
-The execution environment is prepared outside AutoX.
+The production target cluster is read-only. AutoX must not modify it.
 
-Optional external inputs include:
+For local validation, AutoX may use a local TiDB environment when the user has
+approved it or when the workspace already contains the needed binaries/source.
+Call this the `local tidb env`.
 
-- A TiDB connection matching the target cluster version.
-- A TiDB source checkout matching the target cluster version.
-- A schema and statistics replay environment.
-- Exported schema or statistics files.
+Optional local inputs include:
 
-Do not install, download, start, stop, or clean up TiDB.
+- a TiDB binary or source checkout matching the target cluster version;
+- a local standalone TiDB process using the default local storage engine, not
+  TiKV;
+- exported schema JSON and statistics JSON;
+- a schema/statistics replay workspace;
+- `json2schema` from `https://github.com/time-and-fate/json2schema`.
+
+The local TiDB version must match the target cluster TiDB version as closely as
+possible. If it does not match, mark all validation as advisory.
+
+The local TiDB env may be started, stopped, and cleaned up only on the local
+machine. Never point local validation commands at the production cluster.
 
 If no local TiDB environment is available, continue the analysis and mark
 candidate recommendations as `inferred`.
@@ -70,9 +80,34 @@ Never:
 
 Generated SQL is for human review only.
 
+Exception: local-only DDL in the `local tidb env` is allowed for validation,
+including generated `CREATE TABLE`, `LOAD STATS`, hypothetical index
+statements, and hypothetical TiFlash replica statements. This exception never
+applies to the target cluster.
+
 # Phase 0: Pre-check and input confirmation
 
 Complete this phase before querying Clinic.
+
+When the user provides a `cluster_id` and a SQL digest, treat that as sufficient
+authorization to run the read-only diagnostic workflow to completion and produce
+recommendations. Do not stop mid-workflow to ask the user to confirm optional
+inputs such as time range, local TiDB availability, source checkout, schema
+files, or whether to continue.
+
+This Skill is an oncall workflow. Move quickly from evidence collection to
+analysis to final recommendations. Use sensible defaults and mark missing or
+unavailable evidence explicitly.
+
+Only ask a blocking question when a required input is missing or ambiguous, such
+as no `cluster_id`, no way to identify the target digest/query, or multiple
+possible target clusters with the same identifier. Do not ask for confirmation
+before read-only Clinic queries, dashboard debug API downloads, local static
+`EXPLAIN`, or generating review-only SQL.
+
+Never use this autonomy to perform production mutations. Binding SQL, Index DDL,
+settings, and TiFlash replica changes are always review-only unless the user
+separately and explicitly asks for execution.
 
 ## Step 0.1: Verify clinic-api
 
@@ -651,13 +686,129 @@ The workload-wide impact cannot be fully evaluated.
 
 Never interpret missing TopSQL as zero CPU or zero executions.
 
-## Step 3.6: Build the problem profile
+## Step 3.6: Locate the execution bottleneck
+
+After historical plan comparison, locate the bottleneck in the current slow
+plan before deciding whether the remedy is Binding, Index, statistics, rewrite,
+or MPP/TiFlash.
+
+Use this order:
+
+1. If the SQL has joins or correlated subqueries, analyze join bottlenecks first.
+2. If join order is bad, trace it back to base-table logical cardinality
+   estimates and statistics quality.
+3. If logical join order is reasonable, analyze the physical join type:
+   HashJoin, IndexJoin, IndexHashJoin, MergeJoin, Apply, SemiJoin, AntiSemiJoin,
+   and their build/probe sides.
+4. If the SQL is simple or join is not the bottleneck, analyze single-table
+   access-path efficiency.
+5. If the SQL has `ORDER BY`, `LIMIT`, `TopN`, window ordering, ordered
+   aggregation, or a plan with `keep order:true`, analyze the order-preserving
+   path.
+6. Finally classify the low-level bottleneck as:
+   - too many rows or bytes must objectively be read;
+   - too many cop requests, Region seeks, point/range probes, or lookup tasks
+     are generated.
+
+For join-heavy plans, inspect:
+
+- whether the optimizer sorted base relations by reasonable logical estimates;
+- which table becomes the first/outer/driving side;
+- whether each base table can apply its own selective predicates before joining;
+- whether a large outer side drives many IndexJoin or Apply probe tasks;
+- whether the probe side performs repeated index range scans, table lookups, or
+  complex pushed-down work;
+- `inner.total`, `fetch`, `build`, `join`, `probe`, `task`, `concurrency`, and
+  cop task counts in `execution info`;
+- per-probe `process_keys`, `total_keys`, read bytes, RocksDB read time, and
+  `max/p95` cop task latency.
+
+IndexJoin and Apply bottlenecks are often amplification problems. Explain:
+
+```text
+outer rows
+  -> probe task count / cop request count
+  -> keys or bytes read per probe
+  -> total KV/TiKV wall time
+  -> observed latency
+```
+
+For single-table or access-path bottlenecks, inspect:
+
+- existing indexes and their column order;
+- which predicates become index access conditions;
+- which predicates remain residual filters;
+- why residual filters cannot become access conditions: column order, range
+  cut-off, expression/function, implicit cast, collation/type mismatch, prefix
+  index, OR condition, non-sargable predicate, or unsupported pushdown;
+- index scan rows versus table lookup rows;
+- whether IndexLookup amplification dominates;
+- whether IndexMerge could combine multiple selective predicates better than a
+  single weak access path;
+- whether a full scan or MPP scan is preferable because index selectivity is too
+  low.
+
+Do not assume TiKV index access is always the right answer. If the query must
+read a large fraction of a table, or every candidate index still has poor
+selectivity, TiFlash MPP may be the better plan when TiFlash replicas exist and
+the plan can benefit from parallel scan, pushed-down filters, joins, aggregation,
+or exchange.
+
+For order-sensitive plans, trace the complete order-preserving path from the
+root requirement down to the access path that supplies order. Do not assume the
+order supplier is adjacent to `Limit`, `TopN`, or `Selection`; order can be
+passed through several physical operators.
+
+Answer:
+
+- Is ordering produced by an explicit `Sort` or `TopN`, or naturally supplied by
+  an ordered table/index access path?
+- Which access path is chosen mainly to satisfy ordering?
+- Does that choice prevent a more selective filter index or access path?
+- Is there a residual `Selection` above the ordered scan whose actual rows are
+  much smaller than the ordered scan output?
+- Does `LIMIT` rely on early shutdown, and does skew make early shutdown fail?
+- Would a non-ordered but more selective access path plus explicit `Sort` or
+  `TopN` read less data overall?
+- Would a composite index that satisfies both filtering and ordering be the best
+  direction?
+- In a join plan, which operators preserve or destroy order between the order
+  supplier and the root requirement?
+
+For `LIMIT + filter + ordered index` patterns, compare:
+
+```text
+ordered index scan actual rows / process_keys / read bytes
+  -> rows after Selection
+  -> LIMIT count
+```
+
+If the ordered scan reads many rows before finding enough qualifying rows, the
+optimizer may have overvalued early shutdown. This is often a skew problem:
+the order index looks attractive, but the filter values are sparse or clustered
+unfavorably in that order.
+
+When a matching TiDB source checkout is available, verify order propagation
+against the target-version source instead of relying on a fixed memory-based
+operator list. Start from:
+
+- `pkg/planner/property/physical_property.go` for `SortItems`,
+  `AdvisorySortItems`, partial order, and `NeedKeepOrder`;
+- `pkg/planner/core/task.go` for `KeepOrder`, TopN/Limit pushdown, and access
+  path order handling;
+- `pkg/planner/core/optimizer.go` for Apply/order behavior such as reorder
+  buffering;
+- target-version physical operator implementations for child required
+  properties and order preservation.
+
+## Step 3.7: Build the problem profile
 
 Summarize:
 
 - why an individual execution is slow;
 - how much workload-wide impact the digest causes;
 - whether the plan is stable;
+- the dominant execution bottleneck;
 - where cardinality estimation first diverges;
 - whether the problem is suitable for Binding;
 - whether the problem is suitable for a new Index.
@@ -680,6 +831,14 @@ Evidence may include:
 process_keys >> result_rows
 ```
 
+or:
+
+```text
+scan/read bytes are high
+IndexLookup/table lookup rows are high
+IndexRangeScan output is much larger than rows after Selection
+```
+
 Possible causes:
 
 - missing index;
@@ -690,6 +849,11 @@ Possible causes:
 - low-selectivity index;
 - failed partition pruning;
 - excessive lookup or table-row fetches.
+
+Distinguish unavoidable large reads from avoidable scan amplification. If the
+query legitimately needs a large fraction of the data, a narrower index may not
+help enough; consider whether TiFlash MPP or aggregation/join pushdown is the
+better direction.
 
 ## 4.2 Cardinality estimation error
 
@@ -707,6 +871,11 @@ Evidence may include:
 Explain the first operator where the error occurs and the optimizer decision it
 affects.
 
+For join plans, base-table logical estimates are especially important because
+they directly influence join order. If stale or skewed statistics make one base
+table look much smaller or larger than it really is, expect the chosen join
+order to be suspect.
+
 ## 4.3 Wrong access path
 
 Examples:
@@ -717,6 +886,15 @@ Examples:
 - expensive IndexLookup;
 - inappropriate IndexMerge;
 - scan caused by unusable predicates.
+
+For every wrong-access-path diagnosis, document:
+
+- current index access conditions;
+- residual filters that could not become access conditions;
+- the exact reason each important filter is not usable as index access;
+- existing indexes that were considered;
+- whether a new composite index, extending an existing index, IndexMerge, or
+  TiFlash MPP is the more plausible direction.
 
 ## 4.4 Wrong join plan
 
@@ -730,6 +908,30 @@ Inspect:
 - filter pushdown;
 - intermediate row amplification.
 
+Analyze join problems in two layers.
+
+Logical layer:
+
+- Did the optimizer choose a reasonable join order from base-table estimates?
+- Are the base estimates wrong because statistics are stale, missing, pseudo, or
+  skewed?
+- Does the chosen driving table have too many actual rows after filters?
+- Are selective predicates applied before the join, or delayed until after a
+  large intermediate result is formed?
+
+Physical layer:
+
+- If the logical order is reasonable, is the physical join algorithm reasonable?
+- Does IndexJoin or Apply create many probe tasks or cop requests?
+- Does the probe side perform expensive range scans, table lookups, or complex
+  residual filtering for each outer batch?
+- Would HashJoin, IndexHashJoin, MergeJoin, a different build/probe side, or MPP
+  join avoid probe amplification?
+
+When reporting IndexJoin or Apply bottlenecks, include outer rows, probe task
+count, cop request count, keys/bytes read on the probe side, and whether the
+probe side is simple index access or complex access plus filter/lookup.
+
 ## 4.5 Plan instability
 
 Evidence may include:
@@ -740,7 +942,77 @@ Evidence may include:
 - parameter-sensitive behavior;
 - existing good and bad plans for the same digest.
 
-## 4.6 Non-optimizer bottleneck
+## 4.6 Cop request and seek amplification
+
+Evidence may include:
+
+- high cop task count or RPC count relative to returned rows;
+- many IndexJoin or Apply probe tasks;
+- high `max/p95` cop task latency with many small ranges;
+- high RocksDB seek/read activity;
+- large `total_keys` relative to `process_keys` or result rows;
+- high `tikv_wall_time` mostly accumulated across many requests;
+- latency dominated by probe fetch rather than join CPU.
+
+This is a TiDB/TiKV architecture-sensitive bottleneck: even if each individual
+probe is small, many Region/range seeks and cop requests can queue and dominate
+latency.
+
+Possible directions:
+
+- reduce outer rows before probe;
+- change join order or join algorithm;
+- make the probe side more selective or covering;
+- batch or rewrite correlated Apply patterns;
+- use MPP/TiFlash when data volume is large and index probes are not selective;
+- avoid forcing IndexJoin when the probe side is complex or poorly selective.
+
+## 4.7 Order-preserving access path tradeoff
+
+Evidence may include:
+
+- `ORDER BY`, `LIMIT`, `TopN`, ordered aggregation, window ordering, or
+  `keep order:true` in the plan;
+- an index/table path chosen mainly because it can provide order;
+- a residual `Selection` above an ordered scan;
+- scan actual rows, `process_keys`, or read bytes much larger than rows after
+  the residual filter;
+- low `LIMIT` count but high ordered-scan work;
+- skewed distribution where qualifying rows are sparse in the chosen order;
+- a selective alternative index exists but would require explicit `Sort` or
+  `TopN`.
+
+This problem is an order-vs-filter tradeoff. The optimizer may choose an ordered
+path expecting `LIMIT` to stop early, but skew can make it scan far more rows
+than expected before enough rows pass the filter.
+
+Analyze both options:
+
+1. Ordered path:
+   - avoids or reduces explicit `Sort`/`TopN`;
+   - may read many rows that fail filters.
+2. Filter path:
+   - uses a more selective access condition;
+   - may require explicit `Sort`/`TopN`;
+   - can still be faster when it dramatically reduces rows before sorting.
+
+Possible directions:
+
+- use or create a composite index that matches both filtering and ordering;
+- prefer a selective filter index plus explicit `Sort`/`TopN`;
+- use hints or Binding only if a better historical ordered/non-ordered plan is
+  proven suitable for the parameter range;
+- update statistics or extended statistics when skew/correlation causes wrong
+  early-shutdown estimates;
+- consider MPP/TiFlash when the post-filter data volume is still large and
+  ordering can be handled efficiently after parallel filtering.
+
+For join plans, identify the full order-preservation chain. Some operators may
+preserve a child's order under specific physical-property requirements, while
+others destroy order and require a new Sort/TopN. Verify this against the
+target-version source when it materially affects the recommendation.
+
+## 4.8 Non-optimizer bottleneck
 
 Examples:
 
@@ -841,6 +1113,22 @@ Generate Binding SQL for review only.
 
 # Phase 6: Generate Index recommendations
 
+Before generating a new index, follow this decision order:
+
+1. If historical plan comparison found a materially better plan, prefer
+   stabilizing that known plan through Binding or hints.
+2. If bottleneck analysis suggests a specific index can improve access, validate
+   that candidate index in the local TiDB env with schema, stats, and
+   hypothetical index.
+3. If no good historical plan exists and no index candidate is convincing,
+   evaluate whether TiFlash/MPP is a better direction with hypothetical TiFlash
+   replicas in the local TiDB env.
+4. If there is still no clear index or TiFlash direction, use local
+   `EXPLAIN EXPLORE` as the final fallback to search for alternative plans.
+5. If local validation cannot reproduce the expected index, MPP, or explored
+   plan, report the idea as inferred and request production-safe validation
+   rather than presenting it as verified.
+
 ## Step 6.1: Extract access requirements
 
 From the SQL and plan, identify:
@@ -864,6 +1152,19 @@ Consider:
 - lookup cost;
 - ordering elimination;
 - covering width.
+
+When `ORDER BY`, `LIMIT`, or `TopN` exists, do not mechanically prioritize
+ordering columns over selective filters. Evaluate:
+
+- whether the candidate index supplies order, filter, or both;
+- whether ordering columns before filtering columns would force a large scan;
+- whether filtering columns before ordering columns would require an explicit
+  `Sort`/`TopN` but reduce rows enough to be faster;
+- whether data skew makes `LIMIT` early shutdown unreliable;
+- whether the SQL needs a composite index that supports both the selective
+  predicates and the required order;
+- whether the plan could benefit from a non-ordered selective path plus TopN,
+  rather than an ordered weakly selective path.
 
 ### Selection-to-access-path candidates
 
@@ -934,17 +1235,56 @@ Consider:
 Use TopSQL execution count and resource consumption when available to estimate
 the value of the optimization.
 
-## Step 6.4: Validate when a prepared environment exists
+## Step 6.4: Validate index candidates in local tidb env
 
-If a matching local TiDB environment is supplied:
+When analysis suggests a candidate index may improve the slow query, validate it
+in a local TiDB environment before presenting it as more than an inferred idea.
 
-1. Capture the baseline plan.
-2. Create or simulate the candidate index using available target-version
-   capabilities.
-3. Refresh relevant local statistics if required.
-4. Capture the candidate plan.
-5. Compare scan type, processed keys, lookup behavior, sorting, grouping, and
-   join strategy.
+Use the `local tidb env`:
+
+1. Start a local standalone TiDB node whose version matches the target cluster.
+   Use TiDB's default local storage; do not start TiKV.
+2. Convert every involved `tidb_schema_by_table` JSON file into `CREATE TABLE`
+   SQL using `json2schema`:
+
+   ```bash
+   go build .
+   ./json2schema tidb_schema_by_table_1688114034.json
+   ```
+
+   Run this according to the `json2schema` README. Capture the generated DDL as
+   evidence.
+3. Execute the generated `CREATE DATABASE` / `CREATE TABLE` statements in the
+   local TiDB env.
+4. Load the corresponding statistics JSON after schema creation:
+
+   ```sql
+   LOAD STATS '<stats-json-file>';
+   ```
+
+   Load stats before creating hypothetical indexes so the optimizer evaluates
+   candidates against production-like statistics.
+5. Capture the local baseline `EXPLAIN` for the target SQL with the loaded
+   schema and stats.
+6. Simulate the candidate index with the target-version hypothetical index
+   feature. Confirm syntax against the matching TiDB source or tests. In current
+   TiDB versions the syntax is:
+
+   ```sql
+   CREATE INDEX <hypo_index_name> TYPE HYPO ON <db>.<table>(<columns>);
+   DROP HYPO INDEX <hypo_index_name> ON <db>.<table>;
+   ```
+
+7. Capture the local candidate `EXPLAIN`.
+8. Compare the local baseline and candidate plans:
+   - whether the candidate index is selected;
+   - access object and range;
+   - keep order / Sort / TopN changes;
+   - join order and join algorithm;
+   - estimated rows and cost;
+   - whether the plan matches the expected mechanism.
+9. Save the generated DDL, loaded stats filenames, hypothetical index DDL,
+   baseline `EXPLAIN`, and candidate `EXPLAIN` as evidence.
 
 If no prepared environment exists, set:
 
@@ -952,7 +1292,226 @@ If no prepared environment exists, set:
 validation_status: inferred
 ```
 
-## Step 6.5: Select the Index recommendation
+If local TiDB validation succeeds, set:
+
+```text
+validation_status: locally verified by EXPLAIN
+validation_source: local tidb env
+```
+
+Do not mark it `Verified` unless production-safe runtime validation or a
+representative `EXPLAIN ANALYZE` exists. Local `EXPLAIN` with loaded statistics
+proves only that the optimizer can choose the expected static plan under the
+local schema and stats; it does not prove actual runtime improvement.
+
+If the candidate index is not selected in local `EXPLAIN`, do not recommend it
+as the primary Index recommendation unless there is a clear explanation, such as
+missing session variables, version mismatch, incomplete stats, or a different
+candidate that should be tested.
+
+## Step 6.5: Validate TiFlash or MPP candidates in local tidb env
+
+Use this step when:
+
+- historical plan comparison does not find a good plan to stabilize;
+- no candidate index has a convincing mechanism, or local hypothetical-index
+  validation does not choose the expected plan;
+- bottleneck analysis suggests the query reads a large volume of data, index
+  selectivity is weak, probe amplification is high, or MPP may outperform TiKV
+  index access.
+
+First collect TiFlash availability evidence:
+
+- cluster topology: whether TiFlash nodes exist;
+- table metadata/schema: whether involved tables already have TiFlash replicas;
+- historical plans: whether the digest has ever used `mpp[tiflash]`;
+- slow plan evidence: whether TiKV index access is doing large reads or many
+  probes that MPP could avoid.
+
+If historical plan comparison found a better hybrid TiFlash plan, reproduce that
+plan shape as closely as possible. Do not automatically force all involved
+tables to TiFlash. The default validation target is the historical shape, not a
+new all-in MPP shape.
+
+Build a per-table storage map from the historical good plan:
+
+```text
+table alias -> historical storage path
+a -> TiKV index / TiKV table / TiFlash MPP
+p -> TiKV index / TiKV table / TiFlash MPP
+c -> TiKV index / TiKV table / TiFlash MPP
+```
+
+When validating locally, apply `READ_FROM_STORAGE(TIFLASH[...])` only to the
+aliases that used TiFlash in the good historical plan. Leave aliases that used
+TiKV index access on TiKV, and preserve their useful index paths when possible.
+For example, if the good plan used TiFlash only for alias `p`, validate with:
+
+```sql
+/*+ READ_FROM_STORAGE(TIFLASH[p]) */
+```
+
+and not:
+
+```sql
+/*+ READ_FROM_STORAGE(TIFLASH[a,p,c]) */
+```
+
+All-in TiFlash may be a materially different candidate plan and should not be
+used as evidence for a historical p-only hybrid plan.
+
+Extra TiFlash validation for other aliases is allowed only when Step 3.6
+bottleneck analysis provides a concrete reason. For example, if an alias that
+used TiKV in the historical good plan now has weak index access, many lookup
+tasks, poor access/filter selectivity, large read bytes, or high cop/seek
+amplification, run an additional candidate validation for that alias's TiFlash
+path. Report it as a separate candidate, not as the historical-plan validation.
+
+The two valid reasons to choose a TiFlash validation shape are:
+
+1. `history plan cmp`: the shape closely follows a better historical plan;
+2. `skill infer`: Step 3.6 bottleneck analysis identifies another table whose
+   TiKV access path is likely inefficient and worth testing with TiFlash.
+
+When both exist, validate and report them separately:
+
+```text
+Candidate A:
+  source: historical plan
+  validation shape: TIFLASH[p]
+  strategy: history plan cmp
+
+Candidate B:
+  source: bottleneck analysis
+  validation shape: TIFLASH[p,c] or TIFLASH[c]
+  strategy: skill infer
+```
+
+Do not merge these into one conclusion. The historical-shape candidate answers
+"can we stabilize a known better plan?" The analysis-driven candidate answers
+"is there an even better plausible plan based on the current bottleneck?"
+
+If production metadata shows the relevant tables already have available
+TiFlash replicas, do not diagnose the issue as missing replicas. Diagnose it as
+the optimizer cost model not choosing the TiFlash/hybrid path, unless other
+evidence shows replica unavailability, lag, or topology problems. In that case,
+the likely operational action is reviewed hint or Binding validation, not adding
+replicas.
+
+Then validate locally:
+
+1. Use the same local TiDB env prepared for schema and stats validation.
+2. Load schema and stats first.
+3. Add a hypothetical TiFlash replica for each involved table that should be
+   considered for MPP. Confirm syntax against the target TiDB version. In
+   current TiDB versions:
+
+   ```sql
+   ALTER TABLE <db>.<table> SET HYPO TIFLASH REPLICA 1;
+   ALTER TABLE <db>.<table> SET HYPO TIFLASH REPLICA 0;
+   ```
+
+4. Run candidate `EXPLAIN <sql>`.
+5. Check whether the plan uses the expected MPP shape, for example
+   `mpp[tiflash]`, `ExchangeSender`, `TableFullScan`/`Selection`/`HashJoin`
+   pushed to TiFlash, and a lower-cost plan consistent with the bottleneck.
+6. Save baseline and hypothetical TiFlash `EXPLAIN` as evidence.
+
+If local hypothetical TiFlash validation produces the expected MPP plan, the
+recommendation may be:
+
+```text
+Consider TiFlash / MPP.
+validation_status: locally verified by EXPLAIN
+validation_source: local tidb env
+```
+
+Phrase the operational recommendation carefully. Depending on current topology
+and table metadata, the action might be:
+
+- add TiFlash capacity/nodes;
+- add TiFlash replicas for the involved tables;
+- adjust query hints or create a reviewed Binding to select the proven hybrid
+  plan shape;
+- validate MPP behavior in production with safe `EXPLAIN` before rollout.
+
+If the table already has TiFlash replicas in production but the optimizer still
+does not choose MPP, and local validation also cannot make the desired MPP plan
+appear, do not claim local validation success. Mark it:
+
+```text
+validation_status: inferred
+validation_source: local tidb env could not verify
+```
+
+In that case, recommend that the user run a production-safe validation, such as
+`EXPLAIN` under reviewed settings/hints, and clearly state that the MPP
+recommendation is inferred from bottleneck analysis rather than locally
+verified.
+
+Do not recommend TiFlash/MPP when:
+
+- the query is point/range selective and TiKV index access is already cheap;
+- MPP would require scanning much more data without compensating parallelism;
+- the cluster lacks TiFlash capacity and the workload value does not justify
+  adding it;
+- the local plan only improves estimated cost without matching the expected
+  execution mechanism.
+
+## Step 6.6: Run local plan explore as final fallback
+
+Use this step only when all of the following are true:
+
+1. historical plan comparison did not find a good plan to stabilize;
+2. bottleneck analysis did not produce a convincing index idea;
+3. bottleneck analysis did not produce a convincing TiFlash/MPP idea, or local
+   hypothetical TiFlash validation did not produce the expected MPP plan;
+4. schema and stats have already been loaded into the local TiDB env.
+
+Run `EXPLAIN EXPLORE` in the same local TiDB env that already has the generated
+schema and loaded statistics:
+
+```sql
+EXPLAIN EXPLORE <sql>;
+```
+
+When the target TiDB version supports it, `EXPLAIN EXPLORE '<digest>'` or
+`EXPLAIN EXPLORE REPLAYER '<replayer-file>'` may also be used, but prefer the
+exact SQL text when it is available and representative.
+
+Do not run `EXPLAIN EXPLORE ANALYZE` unless local data has intentionally been
+loaded and execution is safe. The normal AutoX local validation path uses static
+`EXPLAIN EXPLORE` only.
+
+Inspect the explored candidates:
+
+- candidate plan text;
+- plan digest;
+- estimated cost/latency fields when present;
+- generated candidate hint or binding SQL when present;
+- access path changes;
+- join order and join algorithm changes;
+- order-preserving path changes;
+- TiKV vs TiFlash / MPP changes;
+- whether the candidate's mechanism matches the diagnosed bottleneck.
+
+If `EXPLAIN EXPLORE` finds a plausible better plan, report it as:
+
+```text
+validation_status: locally explored by EXPLAIN EXPLORE
+validation_source: local tidb env
+strategy: plan explore
+```
+
+Do not automatically execute generated `EXPLAIN ANALYZE` statements or
+`CREATE GLOBAL BINDING` statements returned by `EXPLAIN EXPLORE`. They are
+review-only evidence.
+
+If `EXPLAIN EXPLORE` returns no better candidate, say so explicitly and set the
+recommendation to `More evidence is required` or the most appropriate
+not-recommended conclusion.
+
+## Step 6.7: Select the Index recommendation
 
 Rank candidates by:
 
@@ -973,6 +1532,24 @@ Index not recommended.
 # Phase 7: Produce the final report
 
 Use this exact top-level structure.
+
+Every recommendation must include provenance:
+
+```text
+Recommendation source:
+history plan / local tidb env / skill inference / production evidence
+Strategy:
+history plan cmp / skill infer / plan explore
+```
+
+Use:
+
+- `history plan cmp` when the recommendation comes from comparing existing good
+  and bad historical plans;
+- `skill infer` when the recommendation comes from manual/skill bottleneck
+  analysis, optionally validated by local hypothetical index or hypothetical
+  TiFlash `EXPLAIN`;
+- `plan explore` when the recommendation comes from local `EXPLAIN EXPLORE`.
 
 ## Cluster and query context
 
@@ -996,6 +1573,7 @@ Include:
 - TopSQL evidence;
 - plan variation;
 - historical plan comparison;
+- bottleneck analysis;
 - cardinality estimation findings;
 - likely root cause;
 - missing evidence.
@@ -1021,7 +1599,60 @@ Best known historical plan:
 Why it is better:
 Whether all executions are slow:
 Whether plan stabilization is applicable:
+Recommendation source:
+history plan
+Strategy:
+history plan cmp
 Missing evidence:
+```
+
+## Bottleneck analysis
+
+Include:
+
+```text
+Dominant bottleneck:
+Join-related: yes / no / unknown
+
+If join-related:
+  logical join order:
+  base-table estimate quality:
+  physical join type:
+  build/probe side:
+  outer rows:
+  probe task / cop request count:
+  probe-side access path:
+  probe-side keys / bytes / read time:
+  amplification mechanism:
+
+If single-table or access-path-related:
+  current access path:
+  access conditions:
+  residual filters:
+  why filters are not index access:
+  existing useful indexes:
+  lookup amplification:
+  IndexMerge applicability:
+
+If order-sensitive:
+  order requirement:
+  explicit Sort/TopN or natural access order:
+  order supplier:
+  order-preservation chain:
+  ordered-path rows / bytes before filter:
+  rows after filter:
+  LIMIT early-shutdown effectiveness:
+  filter-index alternative:
+  composite filter+order index applicability:
+
+Low-level bottleneck model:
+  large data volume / many cop requests and seeks / both / unknown
+
+TiFlash or MPP applicability:
+  available / not available / unknown
+  topology evidence:
+  table replica evidence:
+  likely helpful / not helpful / needs validation
 ```
 
 ## Binding recommendation
@@ -1041,7 +1672,12 @@ Expected plan:
 Expected benefit:
 
 Validation status:
-Verified / Partially verified / Inferred
+Verified / Locally verified by EXPLAIN / Locally explored by EXPLAIN EXPLORE /
+Partially verified / Inferred
+Validation source:
+Production / local tidb env / historical plan / inferred only
+Strategy:
+history plan cmp / skill infer / plan explore
 
 Applicable parameter range:
 Risks:
@@ -1074,7 +1710,12 @@ Broad / Partial / Workload-dependent
 Workload-wide value:
 
 Validation status:
-Verified / Partially verified / Inferred
+Verified / Locally verified by EXPLAIN / Locally explored by EXPLAIN EXPLORE /
+Partially verified / Inferred
+Validation source:
+Production / local tidb env / historical plan / inferred only
+Strategy:
+history plan cmp / skill infer / plan explore
 
 Write cost:
 Storage cost:
@@ -1088,12 +1729,93 @@ Do not emit executable-looking DDL without the warning:
 Review only. Not executed by AutoX.
 ```
 
+## TiFlash / MPP recommendation
+
+Include when bottleneck analysis or local validation suggests MPP may be a
+better direction than TiKV index access.
+
+```text
+Conclusion:
+Recommended / Not recommended / Needs production-safe validation
+
+Current TiFlash evidence:
+Cluster has TiFlash nodes: yes / no / unknown
+Tables have TiFlash replicas: yes / no / unknown
+Historical MPP plan exists: yes / no / unknown
+
+Candidate MPP plan:
+Expected mechanism:
+Expected benefit:
+
+Local validation:
+Hypo TiFlash used: yes / no
+Validation status:
+Locally verified by EXPLAIN / Inferred / Not verified
+Validation source:
+local tidb env / production-safe EXPLAIN requested / inferred only
+Strategy:
+skill infer / plan explore
+
+Operational action:
+Add TiFlash capacity / add table replicas / test reviewed hints or settings /
+no action
+
+Risks:
+Missing evidence:
+```
+
+Do not present TiFlash or MPP as verified when local hypothetical TiFlash did not
+produce the expected MPP plan. If production already has TiFlash replicas but
+the optimizer does not choose them, state that local validation could not verify
+the plan and ask for production-safe `EXPLAIN` validation.
+
+## Plan Explore recommendation
+
+Include only when local `EXPLAIN EXPLORE` was used.
+
+```text
+Conclusion:
+Recommended / Not recommended / No better explored plan found
+
+Why plan explore was used:
+No good historical plan / no convincing index idea / no convincing TiFlash idea
+
+Local validation:
+Command:
+EXPLAIN EXPLORE <sql>
+Validation status:
+Locally explored by EXPLAIN EXPLORE / No useful candidate / Failed
+Validation source:
+local tidb env
+Strategy:
+plan explore
+
+Best explored candidate:
+Plan digest:
+Candidate plan:
+Candidate hint or binding SQL:
+Expected mechanism:
+Expected benefit:
+
+Risks:
+Missing evidence:
+```
+
+Do not emit executable-looking Binding SQL from `EXPLAIN EXPLORE` without the
+warning:
+
+```text
+Review only. Not executed by AutoX.
+```
+
 ## Final priority
 
 Choose one:
 
 - Binding first, Index later.
 - Index first.
+- TiFlash / MPP validation first.
+- Plan explore candidate first.
 - Fix statistics first; neither Binding nor Index is currently recommended.
 - Investigate non-optimizer bottleneck; neither is currently recommended.
 - More evidence is required.
@@ -1117,6 +1839,14 @@ Explain the priority in one short paragraph.
 | Multiple plan digests | Analyze the important variants separately |
 | Only slow plans found in Slow Query | Check statement summary or TopSQL before concluding no better historical plan exists |
 | Better plan appears only outside Slow Query | Mark historical comparison inferred until representative plan/runtime evidence is collected |
+| Ordered path with residual filter | Compare ordered access plus early shutdown against selective access plus explicit Sort/TopN |
+| `LIMIT` early shutdown fails because of skew | Treat as order-vs-filter tradeoff; consider filter index, composite filter+order index, stats/extended stats, or MPP |
+| Hypo TiFlash produces expected MPP plan locally | Mark as locally verified by EXPLAIN and recommend TiFlash/MPP with local-validation caveats |
+| Production already has TiFlash but optimizer does not choose MPP | If local validation also cannot choose MPP, mark as inferred and request production-safe EXPLAIN validation |
+| Cluster lacks TiFlash capacity | Do not recommend TiFlash unless workload value justifies adding capacity and local/static evidence supports MPP |
+| No historical, index, or TiFlash direction | Run local `EXPLAIN EXPLORE` after schema and stats are loaded |
+| `EXPLAIN EXPLORE` returns generated Binding SQL | Treat it as review-only; do not execute it automatically |
+| `EXPLAIN EXPLORE` finds no useful candidate | Report no better explored plan and request more evidence or non-plan investigation |
 | Local TiDB unavailable | Mark candidates inferred |
 | Local TiDB version mismatch | Treat results as advisory only |
 | Root cause is non-optimizer | Binding and Index may both be not recommended |
@@ -1170,6 +1900,54 @@ python3 scripts/collect_tidb_http_table.py \
 
 This script must not issue `POST`, connect through the MySQL SQL protocol, or
 call mutating TiDB HTTP endpoints.
+
+Use a `local tidb env` only for local validation of candidate plans. This is
+allowed after schema and stats have been collected, and it must never connect to
+the production cluster.
+
+Local validation workflow:
+
+1. Prepare or build a TiDB binary matching the target cluster version.
+2. Start one standalone local TiDB process with the default local storage engine.
+   Do not start TiKV.
+3. Convert `tidb_schema_by_table` JSON to SQL using `json2schema`:
+
+   ```bash
+   go build .
+   ./json2schema tidb_schema_by_table_1688114034.json
+   ```
+
+4. Execute the generated DDL locally.
+5. Execute `LOAD STATS '<stats-json-file>'` locally for each involved table.
+6. Run baseline `EXPLAIN <sql>`.
+7. Create hypothetical indexes locally and run candidate `EXPLAIN <sql>`.
+8. When evaluating MPP, set hypothetical TiFlash replicas locally and run
+   candidate `EXPLAIN <sql>`:
+
+   ```sql
+   ALTER TABLE <db>.<table> SET HYPO TIFLASH REPLICA 1;
+   ALTER TABLE <db>.<table> SET HYPO TIFLASH REPLICA 0;
+   ```
+
+9. When no historical, index, or TiFlash direction is convincing, run local
+   plan exploration:
+
+   ```sql
+   EXPLAIN EXPLORE <sql>;
+   ```
+
+10. Save the baseline, hypothetical-index, hypothetical-TiFlash, and
+    `EXPLAIN EXPLORE` candidate plans as evidence.
+11. Stop the local TiDB process when done.
+
+The local validation script or manual commands must not:
+
+- execute the target SQL against production;
+- run `EXPLAIN ANALYZE` unless local data is intentionally loaded and safe;
+- create real indexes in production;
+- set real TiFlash replicas in production;
+- execute generated Binding SQL from `EXPLAIN EXPLORE` automatically;
+- claim runtime improvement from local `EXPLAIN` alone.
 
 Run `scripts/collect_dashboard_debug_api_table.py` for Dedicated TiDB Cloud
 clusters when Clinic Dashboard can access the TiDB status endpoint but the
