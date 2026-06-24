@@ -800,6 +800,46 @@ Consider:
 - ordering elimination;
 - covering width.
 
+### Selection-to-access-path candidates
+
+When a `Selection` sits immediately above an `IndexRangeScan` or `TableRangeScan`,
+do not mechanically recommend adding the `Selection` predicate column into the
+index access path.
+
+First classify whether the predicate is a broad optimization or only a partial
+optimization:
+
+1. Check whether moving the predicate into index access can actually narrow the
+   scan range. It is usually useful only when preceding index columns are bound
+   by equality or a tight range that still allows the predicate column to
+   participate in the access range.
+2. Compare `actRows`, `process_keys`, `total_keys`, and scan bytes before and
+   after the `Selection`. A useful signal is a meaningful drop between the scan
+   output and the rows that survive the `Selection`.
+3. Check whether this access path is a dominant latency contributor. If most
+   time is spent in a different join probe, lookup, Sort, Agg, TiFlash exchange,
+   lock/backoff, or cluster-level bottleneck, the index change may be secondary.
+4. Look for same-shape evidence across related plans or tenants when available.
+   If the same `Selection` predicate barely reduces rows in comparable plans,
+   classify the candidate as partial or workload-dependent.
+5. Use schema and stats JSON to confirm cardinality, histogram/CMSketch/top-N,
+   and correlation when available. Do not rely only on column names such as
+   `site_code`, `tenant_id`, or `currency`.
+
+Example judgment:
+
+- If `IndexRangeScan(create_ymd, currency, user_idx, site_code)` scans about
+  479k rows for one day and the parent `Selection(site_code = ...)` leaves about
+  108k rows, adding or reordering `site_code` into the useful access prefix may
+  reduce scan work for that tenant/query shape.
+- If a same-shape plan scans about 145k rows and the parent
+  `Selection(site_code = ...)` also leaves about 145k rows, the same idea is only
+  a partial optimization and must not be presented as generally effective.
+
+In the report, explicitly say when such an index is a partial optimization:
+describe which predicates/tenants benefit, which comparable evidence does not
+benefit, and what validation is still required before DDL.
+
 ## Step 6.2: Compare with existing indexes
 
 Use `SHOW CREATE TABLE`.
@@ -939,6 +979,8 @@ Predicate/index mapping:
 Existing-index relationship:
 Expected plan change:
 Expected scan reduction:
+Optimization scope:
+Broad / Partial / Workload-dependent
 Workload-wide value:
 
 Validation status:
