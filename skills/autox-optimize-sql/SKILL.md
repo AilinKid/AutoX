@@ -1609,34 +1609,13 @@ Use this step only when all of the following are true:
    hypothetical TiFlash validation did not produce the expected MPP plan;
 4. schema and stats have already been loaded into the local TiDB env.
 
-Run `EXPLAIN EXPLORE` in the same local TiDB env that already has the generated
-schema and loaded statistics:
+Invoke `$autox-explore-sql` for this step. Pass the local TiDB env that already
+has generated schema and loaded statistics, plus the target SQL and TiDB
+version. `$autox-explore-sql` owns the detailed plan-explore rules, including
+bare-SQL exploration, hint removal, binding isolation, supported `EXPLAIN
+EXPLORE` forms, candidate capture, and no-ANALYZE safety.
 
-```sql
-EXPLAIN EXPLORE <sql>;
-```
-
-When the target TiDB version supports it, `EXPLAIN EXPLORE '<digest>'` or
-`EXPLAIN EXPLORE REPLAYER '<replayer-file>'` may also be used, but prefer the
-exact SQL text when it is available and representative.
-
-Do not run `EXPLAIN EXPLORE ANALYZE` unless local data has intentionally been
-loaded and execution is safe. The normal AutoX local validation path uses static
-`EXPLAIN EXPLORE` only.
-
-Inspect the explored candidates:
-
-- candidate plan text;
-- plan digest;
-- estimated cost/latency fields when present;
-- generated candidate hint or binding SQL when present;
-- access path changes;
-- join order and join algorithm changes;
-- order-preserving path changes;
-- TiKV vs TiFlash / MPP changes;
-- whether the candidate's mechanism matches the diagnosed bottleneck.
-
-If `EXPLAIN EXPLORE` finds a plausible better plan, report it as:
+If `$autox-explore-sql` finds a plausible better plan, report it as:
 
 ```text
 validation_status: locally explored by EXPLAIN EXPLORE
@@ -1724,7 +1703,7 @@ Provenance:
 - Recommendation source: <history plan | local tidb env | skill inference | production evidence>
 - Strategy: <history plan cmp | skill infer | plan explore>
 - Validation status: <production verified | locally verified by EXPLAIN | locally explored by EXPLAIN EXPLORE | partially verified | inferred | not run>
-- Validation level: <inferred | plan_verified | runtime_verified | prod_verified>
+- Validation level: <inferred | plan_verified | prod_verified>
 - Production safety: review only; AutoX did not execute binding, create indexes, modify TiFlash replicas, or change production settings.
 
 Diagnosis metadata:
@@ -1761,7 +1740,7 @@ Plan after:
 - Stats source: <source or unavailable>
 - Validation type: <local static EXPLAIN | EXPLAIN EXPLORE | production EXPLAIN | not run>
 - Validation result: <locally verified by EXPLAIN | locally explored | production verified | rejected | not run | unavailable>
-- Validation level: <inferred | plan_verified | runtime_verified | prod_verified | unavailable>
+- Validation level: <inferred | plan_verified | prod_verified | unavailable>
 - Estimated rows and cost: <values or unavailable>
 - Full plan:
 ```text
@@ -1780,9 +1759,6 @@ Evidence:
 Why the recommended action helps:
 <explain scan rows, process keys, total keys, read bytes, cop requests, join order, join algorithm, build/probe side, residual filters, order path, or MPP/TiFlash mechanism>
 
-Rejected or lower-priority candidates:
-- <candidate>: <why rejected, lower priority, or none>
-
 Caveats and next validation:
 - <parameter scope, partial optimization scope, missing evidence, missing production EXPLAIN, version mismatch, runtime validation need, cleanup issue, or none>
 ````
@@ -1797,6 +1773,10 @@ Recommended plan shape:
 - a LEFT JOIN p: HashJoin
 - c = dh_account_basic: TiKV covering index access on idx_uidx_sc_uname_rgid(...)
 ```
+
+All SQL shown in the final report is review-only. AutoX does not execute any
+recommended Binding SQL, Index DDL, TiFlash validation SQL, or other production
+SQL in v0.
 
 Do not output concrete hint SQL, Binding SQL, or Index DDL as the recommended
 review-only SQL unless static `EXPLAIN`, `EXPLAIN EXPLORE`, production-safe
@@ -1830,10 +1810,8 @@ Use these validation levels consistently:
   evidence and optimizer reasoning.
 - `plan_verified`: local or production-safe static `EXPLAIN` shows the intended
   plan shape.
-- `runtime_verified`: representative local execution or `EXPLAIN ANALYZE`
-  evidence shows runtime improvement in a safe environment.
-- `prod_verified`: production read-only observation after rollout confirms the
-  intended improvement.
+- `prod_verified`: production read-only observation or approved production
+  validation confirms the intended improvement.
 
 Do not claim runtime improvement from local static `EXPLAIN` alone. Use phrases
 such as "expected to reduce", "plan shape indicates", or "requires production
@@ -1979,15 +1957,11 @@ Local validation workflow:
    ALTER TABLE <db>.<table> SET HYPO TIFLASH REPLICA 0;
    ```
 
-9. When no historical, index, or TiFlash direction is convincing, run local
-   plan exploration:
-
-   ```sql
-   EXPLAIN EXPLORE <sql>;
-   ```
+9. When no historical, index, or TiFlash direction is convincing, invoke
+   `$autox-explore-sql` for local plan exploration.
 
 10. Save the baseline, hypothetical-index, hypothetical-TiFlash, and
-    `EXPLAIN EXPLORE` candidate plans as evidence.
+    `$autox-explore-sql` candidate plans as evidence.
 11. Stop the local TiDB process when done.
 
 The local validation script or manual commands must not:
