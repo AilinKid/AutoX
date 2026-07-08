@@ -852,8 +852,75 @@ outer rows
   -> probe task count / cop request count
   -> keys or bytes read per probe
   -> total KV/TiKV wall time
-  -> observed latency
+   -> observed latency
 ```
+
+### IndexHashJoin/IndexJoin bulk-probe bottleneck rule
+
+When an IndexHashJoin or IndexJoin drives a large number of outer rows into
+repeated inner side probes, and both `estRows ≈ actRows` at the outer side
+(statistics are accurate), the bottleneck is the **join algorithm
+multiplication** — each outer row triggers a full inner probe, so N outer
+rows × M inner cop requests per probe = large total time. The key signal
+is that `table_task` total time dominates `index_task` inside the inner
+IndexLookUp, but the inner access path is already optimal (existing index,
+selective predicates used as access conditions).
+
+Two complementary strategies, in priority order:
+
+1. **Validate HASH_JOIN vs current join algorithm** — force `/*+ HASH_JOIN(t1,
+   t2) */` and compare `EXPLAIN ANALYZE` against the baseline IndexHashJoin.
+   A hash build/probe may be cheaper than many individual index lookups when
+   the outer side is large and the inner side fits in memory.
+2. *(Note, not a Review-only SQL item)* `tidb_index_lookup_join_batch_size`
+   can reduce cop round-trips per outer batch, but it is a weak mitigation —
+   it reduces the penalty without eliminating the probe multiplication.
+   Mention it in Caveats, never in Review-only SQL.
+
+Mark as **"No optimizer action"** — the plan is already optimal for the
+available indexes. No binding, index, or statistics change is needed. Both
+batch_size tuning and HASH_JOIN validation are noted in Caveats as optional
+mitigations, not as Review-only SQL requirements.
+
+
+### Mixed-engine IndexJoin (TiFlash Build x TiKV Probe) -- MPP first rule
+
+When an IndexHashJoin or IndexJoin has its Build side reading from TiFlash
+and its Probe side in TiKV, this is a cross-engine join. Every outer row
+triggers a TiKV coprocessor round-trip, creating cop RPC amplification
+across the TiFlash -> TiDB -> TiKV boundary. The primary optimization is to
+push the entire join into TiFlash via MPP, not to tune batch_size.
+
+Diagnosis steps:
+1. Add TiFlash replica for the Probe-side table.
+2. Run EXPLAIN -- if MPP cost appears higher than IndexJoin, the optimizer
+   may be underestimating TiFlash scan parallelism. Run EXPLAIN ANALYZE.
+3. If EXPLAIN ANALYZE confirms MPP is faster, a binding may be needed to
+   force the MPP plan (optimizer may still prefer IndexJoin based on cost).
+4. batch_size is a weak fallback, not a primary recommendation. It reduces
+   cop round-trips but does not eliminate the cross-engine penalty. Only
+   suggest it if MPP is not viable (e.g. TiFlash capacity exhausted).
+5. Mark as Binding first -- the binding forces the MPP plan if the
+   optimizer does not auto-select it.
+
+
+### UNION / multi-arm plan-choice inconsistency rule
+
+When a UNION has multiple arms that join the same table pair with similar
+data volumes but the optimizer selects different join algorithms or storage
+engines for each arm, compare the execution statistics:
+
+1. Check if both tables have TiFlash replicas (look for `mpp[tiflash]` or
+   `tiflash_task` in the runtime stats of any arm). If one arm uses MPP and
+   another uses TiKV, the TiKV arm is an engine-selection error.
+2. Run `EXPLAIN` with `/*+ READ_FROM_STORAGE(TIFLASH[t1, t2]) */` hint on
+   the slow arm to verify MPP can be selected.
+3. If the hint produces an MPP plan with lower cost, recommend a binding:
+   `CREATE GLOBAL BINDING ... USING SELECT /*+ READ_FROM_STORAGE(TIFLASH[t1,
+   t2]) */ ...`.
+4. Mark as **"Binding first"** — the binding forces consistent MPP selection
+   across all UNION arms based on evidence that another arm already succeeds
+   with MPP on the same tables.
 
 For single-table or access-path bottlenecks, inspect:
 
@@ -958,6 +1025,14 @@ Separate every statement into:
 # Phase 4: Classify the root cause
 
 Classify the SQL into one or more categories.
+
+**Mandatory diagnostic order: time -> actRows -> recommendation. Never reverse.**
+
+Step 1: Read the runtime stats to identify WHERE time is spent — `index_task` vs `table_task` vs cop task max latency.
+Step 2: Trace `actRows` through every operator to find the selectivity cliff (where rows drop sharply).
+Step 3: Only THEN classify: index problem (selective predicates absent from index), statistics problem (estimates are wrong but plan shape is reasonable), or non-optimizer problem (plan is optimal and time is in cop/TiKV RPC/queue).
+
+Do NOT write "cardinality estimation is suspicious" without first confirming from runtime stats that the estimates are actually wrong — if `estRows` equals `actRows` at the scan operator, the stats are accurate and the problem is the access path.
 
 ## 4.1 Scan amplification
 
@@ -1679,6 +1754,8 @@ top-level headings and no others:
 2. `## Plans Before & After`
 3. `## Analysis`
 
+4. **MANDATORY VALIDATION GATE:** Before presenting this report as final, `Plan after` MUST contain actual `EXPLAIN FORMAT='verbose'` output from a local TiDB run — not "not run", not "unavailable", not a prose explanation. If the local TiDB version matches the cluster version and schema/stats are available, run the EXPLAIN NOW. Do not skip Phase 6 and mark it "inferred". If validation is genuinely blocked, state the exact blocker (e.g. "v6.5.3 binary not built", "schema for table X not collected"). "I forgot" or "I didn't get to it" is not a valid blocker.
+
 Use this exact template:
 
 ````markdown
@@ -1863,6 +1940,12 @@ negative guidance in `Caveats`, for example:
 | Root cause is non-optimizer | Binding and Index may both be not recommended |
 | Data Proxy returns `error` | Do not interpret it as an empty result |
 | Numeric fields are empty strings | Convert defensively; do not crash or invent zero |
+| Query against `information_schema` or other system tables | These always use `MemTableScan` — no index, no stats, no plan variants. No schema collection is needed. Do not mark as schema-blocked or validation-blocked. Mark "No optimizer action" — the MemTableScan plan is the only available plan and cannot be improved. |
+| Selection (Build or Probe side) is highly selective (actRows drops >100×) and the selective predicates are not in index access columns | Identify the EQ/IN predicates that cause the actRows drop. If they are residual filters because a range column sits before them in the index, consider reordering. **Long IN lists (>5 values) must NOT be placed before a range column** — TiDB generates one coprocessor range per IN value, causing cop request explosion. Prefer: small IN list (<=5) or EQ first, then range column, and keep long IN lists as residual filters. If no small IN/EQ exists, keep the range column as the leading access condition. Mark "Index first".
+| IndexHashJoin with accurate estimates but high inner probe count (>1000 outer rows × significant inner lookup time) | The join algorithm itself is the bottleneck, not the access path. Two strategies: (1) tune `tidb_index_lookup_join_batch_size` to increase batch efficiency — larger batches reduce cop round-trips per outer batch (low risk, no DDL); (2) validate HASH_JOIN vs IndexHashJoin via EXPLAIN — a hash build/probe may be cheaper than many individual index lookups (needs validation). Mark "Binding first" to stabilize the chosen join algorithm. | |
+| IndexLookUp with few cop tasks (< 10) but high max cop task latency (> 1s) | Plan is optimal (LIMIT pushed, index matches WHERE+ORDER BY). Check `key_skipped_count` — if >> `process_keys`, MVCC tombstones inflate cop scan. Check execution frequency from slowlog count. Bottleneck is TiKV side (coproc queue, compaction), not optimizer. Mark "Investigate non-optimizer bottleneck". |
+| Application uses `force index` | Binding is moot. Check if plan is already optimal. If scan volume = actual data volume (e.g. daily export), mark "No optimizer action". |
+| Phase 6 local validation was skipped or marked `inferred` when version+data was available | This is a workflow failure. Validation is mandatory when TiDB version matches and schema/stats are available. "Validation not run" is not acceptable as a final status. |
 
 # Script guidance
 
@@ -1926,9 +2009,10 @@ the production cluster.
 Local validation workflow:
 
 1. Prepare or build a TiDB binary matching the target cluster version.
+
+**Constraint:** **NEVER simplify the SQL for validation.** Always use the exact SQL from the slow-log or report -- with its full join structure, subqueries, and predicate count. Do NOT reduce a 6-table join to a 3-table subset, or strip subqueries, or replace complex OR/AND trees. The optimizer can plan differently under different query complexity; validating a simplified version produces incorrect conclusions. If the SQL has placeholders, extract sample arguments from runtime stats or use representative literal values. If placeholders lack arguments, the schema for any involved table is unavailable, or any other blocker prevents running the full SQL, document the exact blocker -- do NOT substitute a simplified query and claim validation.
+
 2. Start one standalone local TiDB process with the default local storage engine.
-   Do not start TiKV.
-3. Convert `tidb_schema_by_table` JSON to SQL using `json2schema`:
 
    ```bash
    go build .
@@ -2114,3 +2198,46 @@ and name the retained path in the final response.
 
 Before returning the final report, make sure it follows the required Phase 7
 template exactly.
+
+| IndexLookUp where table_task dominates and probe-side Selection is highly selective (e.g. actRows 58M → 807, 99.999% filter) | The bottleneck is table lookups — too many rows fetched from table only to be discarded by Selection on the probe side. Step 1: identify EQ predicates in Selection and range predicates. Step 2: build a composite index with EQ columns first, then range columns. Step 3: remaining IN predicates become residual index filters. Step 4: if all Selection conditions are covered, LIMIT can push down to coprocessor and stop after LIMIT matching rows. Mark as "Index first". |
+| IndexLookUp with few cop tasks (< 10) but high max cop task latency (> 1s) | Step 1: confirm the plan is optimal (LIMIT pushed to cop, index matches WHERE + ORDER BY). Step 2: check `key_skipped_count` in scan_detail — if >> `process_keys`, the cop scan is traversing MVCC tombstones. Step 3: check execution frequency from slowlog count. Step 4: if plan is optimal but per-task latency is high + frequency is high, bottleneck is TiKV side. Mark as "Investigate non-optimizer bottleneck". |
+
+## Mandatory validation workflow
+
+## Agent self-diagnosis checklist (before declaring a report done)
+
+Before marking any report as complete, the agent MUST confirm every item below.
+If any item is unchecked, the report is incomplete.
+
+- [ ] **Time breakdown:** Did I compare `index_task` vs `table_task` vs cop task max latency? Which dominates?
+- [ ] **ActRows trace:** Did I trace `actRows` through every operator? Where is the selectivity cliff?
+- [ ] **Root cause names operators:** Does my Root cause name at least one concrete operator (e.g. IndexLookUp_47) and one table?
+- [ ] **Recommendation follows diagnosis:** If table_task dominates and probe-side Selection is selective, is my recommendation "Index first" (not "Binding first" or "Fix statistics first")?
+- [ ] **No boilerplate:** Does every paragraph in Why / Root cause / Evidence reference specific row counts, operator names, or runtime stats from THIS query?
+- [ ] **Validation executed:** Did I run `EXPLAIN FORMAT=verbose` for the full, unsimplified query on a local TiDB? Plan After must contain actual EXPLAIN output.
+- [ ] **No simplified queries:** Did I use the exact production SQL (all joins, all subqueries, all predicates)? If not, why not — and did I document the exact blocker?
+- [ ] **Weak mitigations flagged:** If I recommended `tidb_index_lookup_join_batch_size`, did I also evaluate MPP (if mixed-engine) or HASH_JOIN (if same-engine)? batch_size alone is a weak fallback.
+- [ ] **MPP first for mixed-engine:** If Build side is in TiFlash and Probe side in TiKV, is MPP my primary recommendation?
+- [ ] **System tables handled:** If the query targets `information_schema`, did I mark "No optimizer action" (MemTableScan, no index possible)?
+
+
+Every optimizer diagnosis must complete the full phased workflow. Skipping or
+abbreviating any phase produces an incomplete report that must not be presented
+as final.
+
+| Phase | Deliverable | Must not skip |
+|-------|------------|---------------|
+| 1-2 | Slow-log + plan evidence collected | Even for inferred-only cases |
+| 3 | Schema + stats collected for all involved tables | Unless API is unavailable |
+| 4-5 | Bottleneck analysis + recommendation | Based on real plan data, not boilerplate |
+| 6 | Local TiDB validation | When version matches and schema/stats are available |
+| 7 | Final report with before/after plans | Plan After must be actual EXPLAIN output, not "not run" |
+
+For Phase 6 (local validation):
+- If local TiDB binary matches the cluster version, validation is mandatory.
+- "Validation not run" or "inferred" is only acceptable when the version
+  mismatch is confirmed and documented.
+- Do not skip validation because "the SQL has placeholders" — use sample
+  arguments or extract from runtime stats to produce an executable test SQL.
+- If validation cannot run, document the exact blocker (e.g. "v6.5.3 binary
+  not available", "schema for table X missing from collection").
