@@ -2036,6 +2036,13 @@ Local validation workflow:
 8. When evaluating MPP, set hypothetical TiFlash replicas locally and run
    candidate `EXPLAIN <sql>`:
 
+   **HYPO TIFLASH timing:** After `SET HYPO TIFLASH REPLICA 1`, wait 1-2
+   seconds before running `EXPLAIN`. The metadata needs time to propagate.
+   If `EXPLAIN` still shows TiKV operators (not `mpp[tiflash]`), the
+   ALTER may not have taken effect yet — retry with a longer wait.
+   Do NOT conclude "unistore cannot select MPP" without first verifying
+   the HYPO TIFLASH REPLICA took effect.
+
    ```sql
    ALTER TABLE <db>.<table> SET HYPO TIFLASH REPLICA 1;
    ALTER TABLE <db>.<table> SET HYPO TIFLASH REPLICA 0;
@@ -2231,6 +2238,7 @@ as final.
 | 3 | Schema + stats collected for all involved tables | Unless API is unavailable |
 | 4-5 | Bottleneck analysis + recommendation | Based on real plan data, not boilerplate |
 | 6 | Local TiDB validation | When version matches and schema/stats are available |
+| Plan After shows a simplified test query instead of the full production SQL | Plan After MUST use the exact same SQL as Plan Before — all UNION arms, all subqueries, all joins. A simplified single-arm test EXPLAIN is useful for internal validation but does not belong in the user-facing report. If the full SQL cannot be validated locally (e.g. missing schemas for some tables), state the blocker and show the simplified validation as supplementary evidence, not as Plan After. |
 | 7 | Final report with before/after plans | Plan After must be actual EXPLAIN output, not "not run" |
 
 For Phase 6 (local validation):
