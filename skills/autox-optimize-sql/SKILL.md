@@ -82,6 +82,99 @@ Never reuse a local TiDB data directory, port, generated schema, stats file, or
 report workspace across different clusters or diagnosis IDs. Never assume the
 workspace survives after the diagnosis.
 
+## Top-N Batch Diagnosis Orchestration
+
+Use this section when the user asks AutoX to inspect top slow queries, top SQL,
+top-N digests, many digests, or a batch such as top 40 / top 200.
+
+This is a batch orchestration workflow, not a batch-triage shortcut. The
+orchestrator must collect and rank candidates, then run the full AutoX workflow
+for each selected digest. Do not replace per-digest diagnosis with aggregate
+heuristics.
+
+Default batch parameters:
+
+- `max_concurrency`: 5
+- `top_n`: the user-requested count; if omitted, use a small high-impact set
+  from the ranked slow-query candidates.
+- `workspace`: one parent batch workspace plus one child workspace per digest.
+- `report`: one focused report per digest plus one aggregate report that only
+  references completed focused reports.
+
+When multi-agent or subagent tools are available, use an
+orchestrator/subagent model:
+
+1. The orchestrator resolves cluster context, time range, candidate ranking, and
+   batch limits.
+2. The orchestrator creates one task per digest, or a small shard of digests
+   only when the shard still preserves one focused report per digest.
+3. Each subagent owns exactly one digest at a time and must execute Phase 1
+   through Phase 7 for that digest.
+4. The orchestrator limits active subagents to `max_concurrency`, unless the
+   user explicitly sets another concurrency.
+5. The orchestrator does not diagnose, infer, or rewrite a subagent's
+   recommendation. It may reject an incomplete report and rerun that digest.
+6. The orchestrator merges only completed focused reports into the aggregate
+   report.
+
+If multi-agent or subagent tools are unavailable, keep the same contract and run
+the digest tasks sequentially or in local process batches. Do not use the lack
+of subagent tools as a reason to skip phases or emit generic suggestions.
+
+Per-digest isolation requirements:
+
+- generate a unique `diagnosis_id` for every digest;
+- use a separate child workspace for every digest;
+- never share a local TiDB data directory, schema database, port, generated
+  SQL, hypothetical indexes, hypothetical TiFlash metadata, or report file
+  between digests;
+- schema/stat artifacts may be cached read-only only when the cache key
+  includes cluster ID, TiDB version, database, table, and stats snapshot time;
+- local TiDB ports and data directories must be allocated per active digest or
+  per isolated validation worker;
+- stop every local TiDB process started for a digest before marking that digest
+  complete.
+
+Per-digest completion gates:
+
+- Slow Query and representative plan evidence collection was attempted and
+  errors are preserved explicitly.
+- Schema and stats collection was attempted for all involved tables, unless the
+  SQL targets system tables that do not need schema/stat collection.
+- The report names concrete bottleneck operators and tables when plan evidence
+  exists.
+- Optimizer-related digests must run local validation when the matching local
+  TiDB version, schema, and stats are available.
+- `Plan before` / prior plan contains the complete production runtime plan,
+  preferably the slow-log `decoded_plan` for the representative production
+  execution, in a fenced code block.
+- `Plan before` / prior plan includes real execution details such as `actRows`,
+  `execution info`, `process_keys`, `total_keys`, cop task details, memory, and
+  disk when those fields exist in the production evidence.
+- `Plan after` contains the complete local `EXPLAIN FORMAT='verbose'` output
+  when validation was run, or a fenced code block with the exact blocker and
+  best available EXPLAIN output.
+- The final focused report follows the Phase 7 template exactly.
+
+Aggregate report rules:
+
+- Do not include a recommendation for an optimizer-related digest until its
+  focused report has passed the completion gates.
+- The aggregate report may leave `suggestion` empty for non-optimizer
+  bottlenecks, but it must still point to evidence or explain why no optimizer
+  action is recommended.
+- The aggregate report must reference each focused report path instead of
+  copying or summarizing large plans.
+- If a digest fails collection or validation, include a failed focused report
+  with the exact failed phase, blocker, and retained artifact path.
+- Do not write `More evidence is required` merely because the batch is large.
+  Use it only after the full per-digest workflow has identified a real evidence
+  gap.
+
+For long top-N requests, tell the user that this is a long-running batch
+diagnosis and that progress should be tracked as a goal or resumed workflow when
+the environment supports it. This does not change the completion gates.
+
 ## External and local validation environment
 
 The production target cluster is read-only. AutoX must not modify it.
@@ -487,6 +580,20 @@ For each representative execution, collect:
 Always use `decoded_plan`.
 
 Do not use `plan`; it commonly contains only `"default"`.
+
+Treat the representative `decoded_plan` as the authoritative prior plan for the
+final report. It is the production runtime plan and normally contains `actRows`
+and execution details. Local `EXPLAIN`, local `EXPLAIN FORMAT='verbose'`,
+planner-only plans, simplified plans, and summary plan sketches are not valid
+prior plans.
+
+If rendering `decoded_plan` into a readable tree/table, preserve the original
+parent-child structure exactly. Do not infer indentation from display width, do
+not collapse operators, do not truncate long columns, and do not drop runtime
+columns such as `actRows`, `execution info`, memory, or disk. If faithful
+rendering cannot be guaranteed, include the raw production `decoded_plan` in the
+`Plan before` code block and explain the rendering limitation in the surrounding
+fields.
 
 ## Step 2.5: Detect plan variation
 
@@ -915,12 +1022,27 @@ engines for each arm, compare the execution statistics:
    another uses TiKV, the TiKV arm is an engine-selection error.
 2. Run `EXPLAIN` with `/*+ READ_FROM_STORAGE(TIFLASH[t1, t2]) */` hint on
    the slow arm to verify MPP can be selected.
-3. If the hint produces an MPP plan with lower cost, recommend a binding:
+3. If the hint produces the intended MPP plan with lower local static cost,
+   recommend a binding:
    `CREATE GLOBAL BINDING ... USING SELECT /*+ READ_FROM_STORAGE(TIFLASH[t1,
    t2]) */ ...`.
-4. Mark as **"Binding first"** — the binding forces consistent MPP selection
-   across all UNION arms based on evidence that another arm already succeeds
-   with MPP on the same tables.
+4. If the hint produces the intended MPP plan shape but local static cost is
+   higher, do not reject the candidate solely by local cost when the same
+   slow-log plan already contains a sibling UNION arm that uses TiFlash MPP and
+   has materially better runtime evidence. In this case, mark the candidate as
+   `inferred` or `partially verified`: local EXPLAIN verifies shape reachability,
+   while runtime benefit is inferred from the sibling arm and still needs
+   production-safe validation.
+5. Mark as **"Binding first"** when the engine-selection inconsistency is the
+   dominant bottleneck and the sibling-arm TiFlash runtime evidence is stronger
+   than a modest local static-cost improvement from an index candidate. The
+   binding direction is to force consistent MPP selection across UNION arms; any
+   concrete binding SQL remains review-only and should be withheld until the
+   exact full-SQL hint placement is confirmed by production-safe EXPLAIN.
+6. Do not let a hypothetical index candidate outrank this TiFlash/Binding
+   direction merely because it is locally `plan_verified` or slightly lowers
+   estimated cost. Report that index as secondary unless it clearly fixes the
+   dominant runtime bottleneck and has stronger production evidence.
 
 For single-table or access-path bottlenecks, inspect:
 
@@ -1738,8 +1860,18 @@ Hard rules:
   `unavailable`, `not run`, or `none`; do not delete the field.
 - Keep both `Plan before` and `Plan after` full-plan fields as fenced markdown
   code blocks even when no candidate plan exists.
-- `Plan before` must show the complete slow-log decoded plan with estimated
-  rows/cost when available. Do not summarize it.
+- `Plan before` is the prior plan. It must show the complete production runtime
+  plan for the selected representative execution, preferably the slow-log
+  `decoded_plan`, with estimated rows/cost, `actRows`, execution info, memory,
+  and disk when available. Do not summarize it.
+- `Plan before` must not contain local `EXPLAIN`, local
+  `EXPLAIN FORMAT='verbose'`, local validation output, a simplified plan, a
+  plan sketch, a plan without runtime execution details when production runtime
+  details are available, or an ASCII tree/table whose parent-child indentation
+  is not faithful to the production plan.
+- If the production runtime plan cannot be rendered faithfully, paste the raw
+  production `decoded_plan` or the exact production plan evidence instead of a
+  lossy tree. Never replace it with local EXPLAIN.
 - `Plan after` must show the complete local `EXPLAIN FORMAT='verbose'` output
   from the local TiDB env when local validation was run. Do not summarize it.
 - Put caveats, risks, rejected candidates, and missing evidence inside the
@@ -1800,13 +1932,13 @@ Cluster and SQL:
 - Clinic URL: <Clinic or Dashboard URL for the cluster/digest/time range, or unavailable>
 
 Plan before:
-- Source: <slow log decoded_plan | production EXPLAIN | other | unavailable>
-- Explain format: <decoded slow log plan | EXPLAIN FORMAT='verbose' | EXPLAIN | other | unavailable>
+- Source: <slow log decoded_plan | production EXPLAIN ANALYZE | other production runtime evidence | unavailable>
+- Explain format: <decoded slow log plan | production EXPLAIN ANALYZE | other production runtime plan | unavailable>
 - Query time: <value or unavailable>
 - Plan digest: <plan digest or unavailable>
 - Full plan:
 ```text
-<complete slow-log decoded plan with estimated rows/cost; if unavailable, explain why and include the complete best available plan output>
+<complete production runtime prior plan with estimated rows/cost, actRows, execution info, memory, and disk when available; if unavailable, explain why and include the complete best available production runtime plan evidence>
 ```
 
 Plan after:
@@ -1864,11 +1996,31 @@ direction and write `none` for `Review-only SQL`. If a tested hint is accepted
 by TiDB but produces an unsafe or materially worse plan shape, report it as
 rejected and do not include it as a rollout candidate.
 
-For `Plan before`, use the complete slow-log `decoded_plan` with estimated
-rows/cost and runtime evidence when available. If it is unavailable, keep the
-fenced code block, state why inside the block, and include the complete best
-available plan output. Production-safe `EXPLAIN FORMAT='verbose'` may be
-additional evidence, but it must not replace the slow-log before plan.
+For `Plan before`, use the complete production runtime prior plan. The
+preferred source is slow-log `decoded_plan` with estimated rows/cost, `actRows`,
+execution info, memory, disk, and other runtime evidence. If slow-log
+`decoded_plan` is unavailable, use another production runtime plan source, such
+as production `EXPLAIN ANALYZE`, and clearly label it. If no production runtime
+plan is available, keep the fenced code block and state the exact missing
+evidence. Production-safe `EXPLAIN FORMAT='verbose'` may be additional evidence
+but must not replace the production runtime prior plan because it has no real
+`actRows` or execution details.
+
+The following are invalid in `Plan before`:
+
+- local `EXPLAIN` or local `EXPLAIN FORMAT='verbose'`;
+- local validation output;
+- a simplified plan or plan sketch;
+- a plan missing `actRows` when production runtime evidence includes `actRows`;
+- a rendered ASCII tree/table with broken indentation or incorrect parent-child
+  structure;
+- a truncated plan or a plan that omits long execution info needed for human
+  review.
+
+If rendering `decoded_plan` as a tree/table risks corrupting the tree shape,
+include the raw production `decoded_plan` instead. A readable rendering is
+allowed only when it preserves every operator, parent-child relationship,
+runtime column, and long value without truncation.
 
 For `Plan after`, use the complete local `EXPLAIN FORMAT='verbose'` output
 after loading schema and stats. The fenced code block must show the raw verbose
@@ -2222,6 +2374,10 @@ If any item is unchecked, the report is incomplete.
 - [ ] **Recommendation follows diagnosis:** If table_task dominates and probe-side Selection is selective, is my recommendation "Index first" (not "Binding first" or "Fix statistics first")?
 - [ ] **No boilerplate:** Does every paragraph in Why / Root cause / Evidence reference specific row counts, operator names, or runtime stats from THIS query?
 - [ ] **Validation executed:** Did I run `EXPLAIN FORMAT=verbose` for the full, unsimplified query on a local TiDB? Plan After must contain actual EXPLAIN output.
+- [ ] **Prior plan is production runtime:** Does Plan Before contain the real
+  production runtime plan for the representative execution, with `actRows` and
+  execution details when available? Did I avoid local EXPLAIN, simplified plans,
+  broken ASCII trees, and truncated plans in Plan Before?
 - [ ] **No simplified queries:** Did I use the exact production SQL (all joins, all subqueries, all predicates)? If not, why not — and did I document the exact blocker?
 - [ ] **Weak mitigations flagged:** If I recommended `tidb_index_lookup_join_batch_size`, did I also evaluate MPP (if mixed-engine) or HASH_JOIN (if same-engine)? batch_size alone is a weak fallback.
 - [ ] **MPP first for mixed-engine:** If Build side is in TiFlash and Probe side in TiKV, is MPP my primary recommendation?
