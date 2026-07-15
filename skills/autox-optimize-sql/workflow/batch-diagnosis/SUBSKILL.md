@@ -274,6 +274,10 @@ Include one row per selected digest with:
 - focused report path;
 - concise blocker when failed.
 
+Render the focused report as a Markdown link relative to `batch-summary.md`, for example
+`[report.md](cases/<diagnosis_id>/report/report.md)`. Do not emit an absolute filesystem path in
+the summary because Markdown previewers may not navigate local absolute paths.
+
 Use only the contracted recommendation vocabulary. For non-optimizer cases, preserve
 `Investigate non-optimizer bottleneck`; do not leave the action blank. For completed cases with no
 justified optimizer action, use `No optimizer action`.
