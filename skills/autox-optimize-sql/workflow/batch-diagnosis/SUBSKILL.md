@@ -207,7 +207,10 @@ blocker in the batch summary; do not fabricate an optimizer recommendation.
 
 ## Per-Digest Completion Gate
 
-Mark a child `completed` only when all applicable checks pass:
+Use two completion checks because final cleanup intentionally removes raw evidence and intermediate
+decision artifacts. Do not run a raw-artifact gate after cleanup.
+
+Before cleanup, the child self-audit must confirm all applicable checks:
 
 - Slow Query and representative production plan collection was attempted and errors were
   preserved explicitly;
@@ -215,9 +218,10 @@ Mark a child `completed` only when all applicable checks pass:
   user table; system tables may use `not_applicable`, but a missing record fails the gate;
 - diagnosis opened the complete plan and execution artifacts;
 - the root cause names concrete bottleneck operators and tables when evidence provides them;
-- optimizer candidates were generated concretely before validation;
-- `Index first` has a concrete, validated index candidate and does not use
-  `Review-only SQL: none`;
+- optimizer candidates were generated concretely before validation, and every
+  `candidate_artifact_path` resolved to a file inside the diagnosis workspace;
+- `Index first` has either a plan-validated candidate or an inferred candidate with every Index
+  advisory check true; it does not use `Review-only SQL: none`;
 - local validation ran when matching TiDB version, schema, and statistics were available;
 - validation used the full original SQL without removing joins, subqueries, predicates, or UNION
   arms;
@@ -228,8 +232,27 @@ Mark a child `completed` only when all applicable checks pass:
 - `Plan after` contains complete local `EXPLAIN FORMAT='verbose'` output when validation ran, or
   the exact blocker and best available complete EXPLAIN evidence;
 - the focused report follows `../final-report/SUBSKILL.md` exactly;
-- local processes and per-case temporary validation state were cleaned or the exact leftovers were
-  recorded.
+- the focused report resolves to the canonical child path `report/report.md`;
+- the report was rendered from the complete referenced artifacts before they were removed.
+
+`Investigate non-optimizer bottleneck` and `No optimizer action` do not require a retained optimizer
+candidate artifact. Never infer an artifact location from a filename or require a fixed directory
+such as `plans/candidates/`; resolve the path declared by the candidate record. Candidate records
+and artifacts may live under `decision/`, `experiments/`, or another workspace-local path.
+
+After cleanup, the parent must run `../../scripts/validate_case.py` against the retained handoff.
+The post-cleanup gate validates `result.json`, the focused report, identity, recommendation,
+validation level, cleanup state, report structure, and the optional compact manifest when present.
+New cases must pass without compatibility flags; `--allow-legacy-report-name` is only for auditing
+reports created before the canonical `report/report.md` contract.
+It must not require a child manifest or other persistent case state, and it must not require
+`plans/production_before`, `decision`, evidence files, or candidate artifacts when the compact
+manifest says raw artifacts were cleaned.
+
+Treat agent process exit and completion validity separately. A nonzero retry exit caused by quota,
+transport, or authentication does not invalidate an already valid retained handoff. Run the final
+gate first, preserve the last valid result, and record transport failure only when the handoff is
+still invalid.
 
 If a gate fails, leave the child `running` for retry or mark it `failed` with the blocker. Do not
 merge an incomplete case as a completed recommendation.
@@ -247,6 +270,7 @@ Include one row per selected digest with:
 - child status and current stage;
 - customer-facing recommended action when diagnosis completed;
 - validation level;
+- strongest concrete candidate signal, including an unselected advisory Index candidate;
 - focused report path;
 - concise blocker when failed.
 
@@ -303,6 +327,11 @@ evidence and reports remain in child workspaces.
       "status": "queued",
       "recommended_action": "",
       "validation_level": "",
+      "candidate_signal": {
+        "type": "",
+        "candidate_id": "",
+        "status": "none | advisory | plan_verified | rejected"
+      },
       "report_path": "",
       "failed_stage": "",
       "blocker": ""

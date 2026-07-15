@@ -124,6 +124,12 @@ AutoX must not install, download, build, or provision TiDB, TiDB source, `json2s
 environment dependencies. If a suitable environment is unavailable, record the exact blocker and
 continue without claiming plan verification.
 
+Environment absence changes only validation status and level. Preserve the diagnosis direction
+and the Index candidate's advisory checks. An Index candidate whose advisory gate passed remains
+eligible for an inferred `Index first`; do not replace it with a no-action candidate solely because
+local TiDB was not prepared. A candidate actually rejected by completed validation is not eligible
+for this fallback.
+
 Optional local inputs:
 
 - a TiDB binary or source checkout matching the target cluster version;

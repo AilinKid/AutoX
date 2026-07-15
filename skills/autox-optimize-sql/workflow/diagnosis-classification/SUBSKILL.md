@@ -480,6 +480,8 @@ Every candidate must include:
   "mechanism": "",
   "evidence_paths": [],
   "expected_plan_change": {},
+  "advisory_checks": {},
+  "advisory_evidence": {},
   "validation_steps": [],
   "candidate_artifact_path": ""
 }
@@ -569,6 +571,9 @@ Include:
 - expected access object and range;
 - expected table lookup, Sort/TopN, join, or covering changes;
 - workload value, write/storage cost, regression risk, and any potentially redundant old index;
+- `advisory_checks` with each check from `case-contract.md` set explicitly;
+- `advisory_evidence` mapping every check to a source path or target-version
+  documentation/source reference;
 - validation steps:
   - load schema and stats;
   - capture baseline `EXPLAIN FORMAT='verbose'`;
@@ -582,6 +587,11 @@ Do not recommend adding a long `IN` list (`> 5` values) before a range column by
 Rank Index candidates by root-cause fit, expected scan reduction, workload-wide value, overlap with
 existing indexes, write/storage cost, local validation result, and regression risk. Do not rank an
 index from column order aesthetics or estimated cost alone.
+
+The Index advisory gate passes only when every required check is true. A partial optimization may
+pass only when production evidence shows it addresses a material contributor; record the dominant
+work left unchanged. Do not change `recommended_direction: Index first` to `No optimizer action`
+solely because an externally prepared local TiDB environment is unavailable.
 
 ### TiFlash / MPP Candidate
 

@@ -50,6 +50,7 @@ Read `../autox-optimize-sql/references/case-contract.md`.
 10. Reject candidates that only move cost without explaining the mechanism.
 11. Record the candidate count, source references, and open questions in
     `audit.md`.
-12. Set `current_stage: candidates_generated`.
+12. Return the generated candidates, evidence references, and open questions to
+    `$autox-optimize-sql`.
 
-Return candidates to `$autox-optimize-sql`. Do not apply production changes.
+Do not apply production changes.

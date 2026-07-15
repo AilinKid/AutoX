@@ -7,7 +7,8 @@ description: Normalize and compare baseline and candidate TiDB execution plans, 
 
 Read `../autox-optimize-sql/references/case-contract.md`.
 
-1. Require stage `candidates_generated`.
+1. Require at least one generated candidate or compared plan set, together with
+   the available baseline and candidate evidence.
 2. Record the exact TiDB version, explain format, session variables, bindings,
    stats health, plan digest source, and evidence file for every compared plan.
 3. Normalize unstable plan text without discarding semantic fields. Strip only
@@ -56,6 +57,7 @@ Read `../autox-optimize-sql/references/case-contract.md`.
 10. Rank candidates and document rejected candidates with reasons. Mark a
    recommendation `validated` only when baseline reproduction and candidate
    validation are both adequate; otherwise mark it `advisory` or `unvalidated`.
-11. Save the comparison and selected recommendation under `decision/`.
-12. Update manifest recommendation fields, append to `audit.md`, and set
-   `current_stage: candidates_compared`.
+11. Return the ranked comparison, selected recommendation, rejected candidates,
+    and evidence references. If a run-local workspace exists, save them under
+    `decision/` and update its optional manifest or audit log. Do not require
+    persisted workflow state.

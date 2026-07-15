@@ -78,6 +78,7 @@ Use this layout under the per-diagnosis workspace:
     <candidate_id>/
   decision/
   report/
+    report.md                    # canonical customer-facing report
   cleanup/
 ```
 
@@ -218,20 +219,38 @@ Rules:
   shape before any candidate operation. Use `plan_verified`; final reporting should normally use
   `No optimizer action` unless current production evidence still shows the bad plan active.
 
-Every optimizer candidate validation result must answer:
+Every optimizer candidate plan-validation result must answer:
 
 - `syntax_accepted`: TiDB accepts the candidate syntax.
 - `optimizer_selected_expected_path`: the optimizer selects the expected access path, join, or
   engine after applying the candidate locally.
 - `plan_shape_matches_diagnosis`: the selected plan shape addresses the diagnosed mechanism.
 
-All three values must be `true` before concrete candidate SQL may appear in the final
-`Review-only SQL` field. An inferred direction may still be explained, but its unverified SQL must
-not be printed as a rollout candidate.
+All three values must be `true` before Binding or TiFlash/MPP SQL may appear in the final
+`Review-only SQL` field or any optimizer recommendation may be marked `plan_verified`.
 
-`Index first` requires a concrete index candidate whose DDL passed this gate. It must not appear
-with `Review-only SQL: none`. Missing schema, an unchecked existing-index set, or an absent
-candidate is an incomplete workflow, not an inferred Index recommendation.
+An Index candidate may instead pass the evidence-backed advisory gate when local validation did
+not run. Its candidate artifact must record all of these booleans as `true`:
+
+- `schema_collected`;
+- `candidate_columns_verified`;
+- `existing_indexes_checked`;
+- `production_plan_mechanism_identified`;
+- `material_bottleneck_addressed`;
+- `target_version_ddl_checked`;
+- `operational_risks_recorded`.
+
+The artifact must also include an `advisory_evidence` object that maps every check to source paths
+or a target-version documentation/source reference. The gate fails when any check is false,
+missing, or unsupported. A completed validation result of `rejected` cannot fall back to the
+advisory gate.
+
+An inferred `Index first` requires a concrete DDL, `advisory_gate: passed`, and an exact local
+validation blocker. Its DDL may appear as review-only advisory SQL, but the report must state that
+the candidate plan was not reproduced and must not claim optimizer selection or runtime gain.
+Missing schema, unchecked existing indexes, an absent candidate, or a candidate that does not
+address a material production bottleneck is an incomplete workflow, not an inferred Index
+recommendation.
 
 ## Handoff Requirements
 
@@ -257,6 +276,8 @@ Common candidate fields:
 - `expected_plan_change`
 - `validation_steps`
 - `candidate_artifact_path`
+- `advisory_checks` for Index candidates
+- `advisory_evidence` for Index candidates
 
 Keep candidate-specific detail such as existing-index checks, hinted SQL, hypothetical-index SQL,
 hypothetical TiFlash SQL, expected per-alias shape, and risk notes in the candidate artifact. The
@@ -276,10 +297,13 @@ manifest should point to that artifact instead of copying all details.
 `workflow/final-report/SUBSKILL.md` must:
 
 - use only the contracted recommendation vocabulary;
+- write the customer-facing report to `<workspace>/report/report.md`; other report filenames are
+  invalid for new cases;
 - read complete plan, candidate, and comparison artifacts by path instead of expecting them to be
   copied into the compact manifest;
 - output the selected candidate ID, validation status, validation level, and report path;
-- keep concrete review-only SQL out of the report unless all three validation booleans are true;
+- keep concrete review-only SQL out of the report unless all three validation booleans are true or
+  an inferred Index candidate passed the advisory gate;
 - retain only the redacted final report after cleanup unless the user explicitly requested raw
   artifact retention. If an optional run-local manifest was used, retain its compact redacted form
   with diagnosis and cluster identity, digest, business/UTC time range and timezone, evidence
@@ -296,6 +320,7 @@ retained manifest:
     "selected_candidate_id": "",
     "validation_status": "",
     "validation_level": "",
+    "advisory_gate": "not_applicable | passed | failed",
     "report_path": ""
   },
   "cleanup": {
@@ -344,6 +369,18 @@ When subagents are available:
   generation, local validation when available, final report, and cleanup;
 - never place multiple digests in one subagent task;
 - reject and rerun child output that skipped a required stage or failed a focused completion gate.
+
+Completion is two-phase. The child validates complete referenced evidence and optimizer candidate
+artifacts before cleanup. The parent then validates only the retained handoff with
+`scripts/validate_case.py`, including the compact manifest only when one was retained. The parent
+must not require a child manifest or other persistent case state. It must resolve
+`candidate_artifact_path` rather than assume a directory such as `plans/candidates/`, and it must
+not require raw intermediate artifacts after a successful cleanup. Non-optimizer and no-action
+recommendations do not require a retained optimizer candidate artifact.
+
+Agent process exit is transport state, not case validity. If a retry exits nonzero, preserve an
+already valid retained handoff; classify the transport error only when the final handoff validator
+still fails.
 
 The parent must not diagnose a child digest, invent its candidates, or rewrite its recommendation.
 The aggregate summary references focused report paths and does not copy full SQL, plans, or

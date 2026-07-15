@@ -130,8 +130,9 @@ General routing:
   -> generate no optimizer candidate and recommend `No optimizer action`.
 
 Do not set `Index first` unless schema was collected, existing indexes were checked, and a
-concrete Index candidate is ready for validation. A final `Index first` also requires that the
-candidate pass the validation gate and appear as verified review-only DDL.
+concrete Index candidate is ready for validation. When local validation is unavailable, an Index
+candidate may still become an inferred `Index first` recommendation only after it passes the
+evidence-backed Index advisory gate in `references/case-contract.md`.
 
 `autox-explore-sql` is an internal fallback after local reproduction is checked. It is not a
 customer-facing recommendation.
@@ -148,12 +149,15 @@ Local validation must use the full production SQL shape. Do not simplify joins, 
 subqueries, UNION arms, or parameter structure and then claim the result validates the original SQL.
 
 If validation cannot run, record the exact blocker. Do not ask the customer for more evidence
-when Cloud-side evidence was available to AutoX but insufficient for an optimizer action; use
-`No optimizer action` or `Investigate non-optimizer bottleneck` as appropriate.
+when Cloud-side evidence was available to AutoX. Missing externally prepared local TiDB keeps the
+validation level at `inferred`; it does not by itself demote an Index candidate. Use `No optimizer
+action` or `Investigate non-optimizer bottleneck` only when the collected evidence and applicable
+advisory gate do not justify an optimizer action.
 
 ## Final Report
 
 The final report is owned by `workflow/final-report/SUBSKILL.md`.
+Write it to the canonical artifact path `report/report.md`; do not choose another filename.
 
 The report must include:
 

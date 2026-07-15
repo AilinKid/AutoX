@@ -57,8 +57,8 @@ Apply these rules in order:
    show the bad plan still active, use `No optimizer action`. Do not recommend a stale Binding,
    Index, or TiFlash/MPP operation.
 2. If current production evidence still shows the bad plan active, use the best candidate that
-   passed the validation gate.
-3. A candidate passes the validation gate only when all three values are `true`:
+   passed the plan-validation gate or, for Index only, the evidence-backed advisory gate.
+3. A candidate passes the plan-validation gate only when all three values are `true`:
    - `syntax_accepted`;
    - `optimizer_selected_expected_path`;
    - `plan_shape_matches_diagnosis`.
@@ -69,14 +69,18 @@ Apply these rules in order:
    - a binding that forces a proven MPP shape remains `Binding first`.
    `Index first` additionally requires a concrete candidate DDL in the selected artifact after
    checking existing indexes. It must not appear with `Review-only SQL: none`.
-5. Never promote a rejected candidate, a syntax-only candidate, or a candidate selected only by
+5. When local validation did not run, an Index candidate may map to inferred `Index first` only
+   when every advisory check in `case-contract.md` is true, the report records
+   `Advisory gate: passed`, and the exact environment blocker is preserved. Missing local TiDB is
+   not itself evidence against the candidate.
+6. Never promote a rejected candidate, a syntax-only candidate, or a candidate selected only by
    estimated cost.
-6. If lock, backoff, retry, MVCC tombstones, compaction, coprocessor queueing, IO, hotspot, or
+7. If lock, backoff, retry, MVCC tombstones, compaction, coprocessor queueing, IO, hotspot, or
    saturation dominates, use `Investigate non-optimizer bottleneck`.
-7. If Cloud-side evidence does not justify a safe optimizer action, use `No optimizer action`.
+8. If Cloud-side evidence does not justify a safe optimizer action, use `No optimizer action`.
    Do not ask the customer to provide another round of evidence that AutoX could not obtain from
    the Cloud-side workflow.
-8. Statistics work may appear only as a supporting action or caveat. It is not the primary final
+9. Statistics work may appear only as a supporting action or caveat. It is not the primary final
    recommendation vocabulary.
 
 When multiple passing candidates exist, select the one that fixes the diagnosed runtime mechanism
@@ -85,7 +89,7 @@ or `$autox-compare-plans` result; do not rank candidates from estimated cost alo
 
 ## Review-Only SQL Gate
 
-Include concrete SQL only when all of the following are true:
+Include concrete Binding or TiFlash/MPP SQL only when all of the following are true:
 
 - the candidate was fully specified by diagnosis-classification;
 - validation accepted the syntax on the target or a matching TiDB version;
@@ -93,8 +97,12 @@ Include concrete SQL only when all of the following are true:
 - the plan shape matches the diagnosed mechanism;
 - the candidate plan is complete and available for review.
 
-Otherwise write `none`. Do not print an unverified hint, Binding SQL, Index DDL, or TiFlash/MPP
-validation statement as a rollout candidate.
+An inferred Index candidate may include concrete `CREATE INDEX` DDL when every advisory check is
+true and local validation status is `not run` or `inferred`. Label it review-only, record
+`Advisory gate: passed`, and say the optimizer path and runtime effect were not reproduced.
+
+Otherwise write `none`. Do not print an unverified hint, Binding SQL, failed Index DDL, or
+TiFlash/MPP validation statement as a rollout candidate.
 
 If the selected action would be `Index first` but this gate requires `none`, return to diagnosis
 or validation. Do not publish the report as `Index first`; use another contracted action supported
@@ -222,6 +230,8 @@ Provenance:
 - Strategy: <history plan cmp | skill infer | plan explore | none>
 - Validation status: <production verified | locally verified by EXPLAIN | locally explored by EXPLAIN EXPLORE | plan already recovered | rejected | inferred | not run>
 - Validation level: <inferred | plan_verified | prod_verified>
+- Advisory gate: <passed | failed | not applicable>
+- Selected candidate ID: <candidate id or none>
 - Production safety: review only; AutoX did not execute bindings, create indexes, modify TiFlash replicas, change statistics, or change production settings.
 
 Diagnosis metadata:
@@ -262,7 +272,8 @@ Plan after:
 - Estimated rows and cost: <values or unavailable>
 - Full plan:
 ```text
-<complete full-SQL plan, or exact validation blocker and best available complete EXPLAIN output>
+<complete full-SQL plan, or exact validation blocker and best available complete EXPLAIN output;
+for inferred Index advice, state that the candidate plan was not reproduced>
 ```
 
 ## Analysis
@@ -296,17 +307,25 @@ misleading; use stable placeholders consistently.
 Before finalizing:
 
 1. Render a draft report from the complete artifacts.
-2. Remove hypothetical state created in the externally prepared local validation session. Do not
+2. Before cleanup, resolve every selected optimizer candidate's `candidate_artifact_path` inside
+   the diagnosis workspace and complete the report completion check from the full artifacts.
+   `Investigate non-optimizer bottleneck` and `No optimizer action` do not require a retained
+   optimizer candidate artifact.
+3. Remove hypothetical state created in the externally prepared local validation session. Do not
    stop or reconfigure the externally managed TiDB environment.
-3. Remove raw Clinic/Dashboard responses, download tokens, and generated replay files created in
+4. Remove raw Clinic/Dashboard responses, download tokens, and generated replay files created in
    the diagnosis workspace unless the user explicitly requested retention.
-4. If cleanup fails, record the exact leftover path and contents in the existing cleanup field.
-5. Retain the redacted final report needed to explain the decision. If an optional run-local
+5. If cleanup fails, record the exact leftover path and contents in the existing cleanup field.
+6. Retain the redacted final report needed to explain the decision. If an optional run-local
    manifest was used, retain its compact redacted form with diagnosis ID, cluster
    ID/name/version/deployment type, digest, business and UTC time ranges plus timezone,
    `slow_query_sample_count`, `plan_variant_count`, `schema_tables`, `stats_snapshot_time`,
    recommendation, cleanup, and redaction state.
-6. Update the report's cleanup field after cleanup is known.
+7. Update the report's cleanup field after cleanup is known.
+
+After cleanup, callers must validate the retained report and the optional compact manifest when
+present, rather than requiring raw plan, evidence, decision, or candidate files that this workflow
+was instructed to remove.
 
 ## Completion Check
 
@@ -320,7 +339,8 @@ Do not mark the report complete unless all applicable checks pass:
 - `Plan before` is complete production runtime evidence, not local EXPLAIN;
 - `Plan after` is complete full-SQL EXPLAIN evidence when validation ran;
 - a matching local environment was not skipped without an exact blocker;
-- concrete SQL passed all three validation booleans;
+- concrete SQL passed all three validation booleans, or inferred Index DDL passed every advisory
+  check and is explicitly marked as not plan-reproduced;
 - no local static EXPLAIN is presented as runtime proof;
 - mixed-engine IndexJoin cases evaluated MPP as the primary mechanism;
 - system-table `MemTableScan` cases use `No optimizer action`;
@@ -329,9 +349,13 @@ Do not mark the report complete unless all applicable checks pass:
 
 ## Output Contract
 
-Write the full report to the report artifact. If an optional manifest is used, keep its handoff
-compact. The following JSON is a partial update merged into that manifest, not a replacement for
-retained diagnosis identity and `evidence_summary` fields:
+Write the full report to exactly `<workspace>/report/report.md`. Do not use `final.md`,
+`final-report.md`, `final_report.md`, `focused-report.md`, or another filename. Set every
+`report_path` in `result.json` and the optional compact manifest to this same canonical artifact.
+
+If an optional manifest is used, keep its handoff compact. The following JSON is a partial update
+merged into that manifest, not a replacement for retained diagnosis identity and
+`evidence_summary` fields:
 
 ```json
 {
@@ -340,7 +364,8 @@ retained diagnosis identity and `evidence_summary` fields:
     "selected_candidate_id": "",
     "validation_status": "",
     "validation_level": "",
-    "report_path": ""
+    "advisory_gate": "not_applicable | passed | failed",
+    "report_path": "report/report.md"
   },
   "cleanup": {
     "raw_artifacts_cleaned": true,
