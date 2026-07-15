@@ -38,35 +38,64 @@ class ValidateCaseTest(unittest.TestCase):
         (workspace / "result.json").write_text(
             json.dumps(result), encoding="utf-8"
         )
-        (report_dir / "report.md").write_text(
-            f"""## Conclusion
-
-Recommended action:
+        if action in VALIDATE_CASE.PLAN_CHANGING_ACTIONS:
+            conclusion = f"""Action:
 {action}
 
-Review-only SQL:
+Plan before:
+IndexLookUp with table-row fetch
+
+Plan after:
+Covering IndexReader; candidate plan was not reproduced
+
+Why:
+The candidate removes the diagnosed table-row fetch while preserving the required order."""
+            review_sql = """Review-only SQL:
 Review only. Not executed by AutoX.
 ```sql
 CREATE INDEX idx_a ON t (a);
 ```
 
-Provenance:
-- Validation status: {validation_status}
-- Validation level: {level}
-- Advisory gate: {advisory_gate or 'not applicable'}
-- Selected candidate ID: idx_a
+"""
+        else:
+            conclusion = f"""Action:
+{action}
+
+Why:
+The observed plan already uses the useful access path, so no plan-changing action addresses the dominant runtime mechanism."""
+            review_sql = ""
+        (report_dir / "report.md").write_text(
+            f"""## Conclusion
+
+{conclusion}
 
 ## Plans Before & After
 
 Plan before:
+```text
 complete production plan
+```
 
 Plan after:
+```text
 The candidate plan was not reproduced.
+```
 
 ## Analysis
 
-Raw artifact cleanup: cleaned
+{review_sql}Observed evidence:
+The production plan performs a table-row fetch.
+
+Inference:
+The covering candidate targets that fetch.
+
+Validation and risks:
+- Validation status: {validation_status}
+- Validation level: {level}
+- Advisory gate: {advisory_gate or 'not applicable'}
+- Selected candidate ID: idx_a
+- Missing evidence or blocker: candidate plan was not reproduced
+- Risk and next validation: validate plan shape before rollout
 """,
             encoding="utf-8",
         )
@@ -78,12 +107,13 @@ Raw artifact cleanup: cleaned
     def tearDown(self) -> None:
         self.tempdir.cleanup()
 
-    def validate(self, workspace: Path,
-                 allow_legacy_report_name: bool = False) -> list[str]:
+    def validate(self, workspace: Path, allow_legacy_report_name: bool = False,
+                 allow_legacy_report_format: bool = False) -> list[str]:
         args = Namespace(
             workspace=str(workspace), rank=None, digest=None,
             diagnosis_id=None, json_output=False,
             allow_legacy_report_name=allow_legacy_report_name,
+            allow_legacy_report_format=allow_legacy_report_format,
         )
         _, errors, _ = VALIDATE_CASE.validate(args)
         return errors
@@ -138,6 +168,99 @@ Raw artifact cleanup: cleaned
         self.assertEqual(
             [],
             self.validate(workspace, allow_legacy_report_name=True),
+        )
+
+    def test_no_action_with_compact_reason_is_valid(self) -> None:
+        workspace = self.write_case("No optimizer action", "inferred", None)
+        self.assertEqual([], self.validate(workspace))
+
+    def test_no_action_without_reason_is_invalid(self) -> None:
+        workspace = self.write_case("No optimizer action", "inferred", None)
+        report = workspace / "report" / "report.md"
+        text = report.read_text(encoding="utf-8")
+        text = text.replace(
+            "\nWhy:\nThe observed plan already uses the useful access path, so no "
+            "plan-changing action addresses the dominant runtime mechanism.",
+            "",
+            1,
+        )
+        report.write_text(text, encoding="utf-8")
+        self.assertIn(
+            "non-plan-changing Conclusion must contain only Action and Why",
+            self.validate(workspace),
+        )
+
+    def test_no_action_conclusion_rejects_plan_fields(self) -> None:
+        workspace = self.write_case("No optimizer action", "inferred", None)
+        report = workspace / "report" / "report.md"
+        text = report.read_text(encoding="utf-8")
+        text = text.replace(
+            "\nWhy:\nThe observed plan",
+            "\nPlan before:\nIndexLookUp\n\nWhy:\nThe observed plan",
+            1,
+        )
+        report.write_text(text, encoding="utf-8")
+        self.assertIn(
+            "non-plan-changing Conclusion must contain only Action and Why",
+            self.validate(workspace),
+        )
+
+    def test_plan_action_requires_before_and_after_summaries(self) -> None:
+        workspace = self.write_case("Index first", "inferred", "passed")
+        report = workspace / "report" / "report.md"
+        text = report.read_text(encoding="utf-8")
+        text = text.replace(
+            "\nPlan after:\nCovering IndexReader; candidate plan was not reproduced\n",
+            "\n",
+            1,
+        )
+        report.write_text(text, encoding="utf-8")
+        self.assertIn(
+            "plan-changing Conclusion must contain only Action, one-line Plan before, "
+            "one-line Plan after, and Why",
+            self.validate(workspace),
+        )
+
+    def test_plan_section_rejects_verbose_metadata(self) -> None:
+        workspace = self.write_case("Index first", "inferred", "passed")
+        report = workspace / "report" / "report.md"
+        text = report.read_text(encoding="utf-8")
+        text = text.replace(
+            "Plan before:\n```text",
+            "Plan before:\n- Source: slow log decoded_plan\n```text",
+            1,
+        )
+        report.write_text(text, encoding="utf-8")
+        self.assertIn(
+            "plan section contains verbose metadata field Source:",
+            self.validate(workspace),
+        )
+
+    def test_legacy_report_format_requires_explicit_compatibility_flag(self) -> None:
+        workspace = self.write_case("Index first", "inferred", "passed")
+        report = workspace / "report" / "report.md"
+        text = report.read_text(encoding="utf-8")
+        conclusion_end = text.index("\n## Plans Before & After")
+        legacy = """## Conclusion
+
+Recommended action:
+Index first
+
+Review-only SQL:
+Review only. Not executed by AutoX.
+```sql
+CREATE INDEX idx_a ON t (a);
+```
+""" + text[conclusion_end:]
+        report.write_text(legacy, encoding="utf-8")
+        self.assertIn(
+            "plan-changing Conclusion must contain only Action, one-line Plan before, "
+            "one-line Plan after, and Why",
+            self.validate(workspace),
+        )
+        self.assertEqual(
+            [],
+            self.validate(workspace, allow_legacy_report_format=True),
         )
 
 

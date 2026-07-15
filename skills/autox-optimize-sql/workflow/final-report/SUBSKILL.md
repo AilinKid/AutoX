@@ -101,8 +101,9 @@ An inferred Index candidate may include concrete `CREATE INDEX` DDL when every a
 true and local validation status is `not run` or `inferred`. Label it review-only, record
 `Advisory gate: passed`, and say the optimizer path and runtime effect were not reproduced.
 
-Otherwise write `none`. Do not print an unverified hint, Binding SQL, failed Index DDL, or
-TiFlash/MPP validation statement as a rollout candidate.
+For a non-plan-changing action, omit the `Review-only SQL` field entirely; do not print a `none`
+SQL block. Do not print an unverified hint, Binding SQL, failed Index DDL, or TiFlash/MPP
+validation statement as a rollout candidate.
 
 If the selected action would be `Index first` but this gate requires `none`, return to diagnosis
 or validation. Do not publish the report as `Index first`; use another contracted action supported
@@ -200,77 +201,49 @@ The final report must have exactly these three top-level headings, in this order
 2. `## Plans Before & After`
 3. `## Analysis`
 
-Do not add a preface, appendix, process log, or another top-level heading. Keep every field label.
-Fill unknown values with `unknown`, `unavailable`, `not run`, or `none` instead of deleting fields.
-Do not use first-person workflow narration.
+Do not add a preface, appendix, process log, or another top-level heading. Do not use first-person
+workflow narration.
 
-Use this template:
+Treat `Conclusion` as the default reading surface:
+
+- `No optimizer action` and `Investigate non-optimizer bottleneck` contain only `Action` and
+  `Why`. `Why` must briefly state the diagnosed mechanism and why no plan-changing action is
+  justified.
+- `Binding first`, `Index first`, and `TiFlash / MPP first` contain only `Action`, one-line
+  `Plan before`, one-line `Plan after`, and `Why`.
+- Do not put SQL, provenance, validation metadata, diagnosis IDs, time ranges, cleanup state,
+  redaction state, cluster metadata, or evidence lists in `Conclusion`.
+
+Keep complete plan trees in `Plans Before & After`. Do not precede them with source, explain
+format, query time, plan digest, TiDB version, schema source, stats source, validation type, or
+estimated cost field lists. Put only decision-relevant context, observed evidence, inference,
+validation, risks, and missing evidence in `Analysis`.
+
+Use this template for a plan-changing action:
 
 ````markdown
 ## Conclusion
 
-Recommended action:
-<Binding first | Index first | TiFlash / MPP first | Investigate non-optimizer bottleneck | No optimizer action>
+Action:
+<Binding first | Index first | TiFlash / MPP first>
 
-Review-only SQL:
-Review only. Not executed by AutoX.
-```sql
-<verified candidate Binding SQL / Index DDL / TiFlash or MPP validation SQL, or none>
-```
+Plan before:
+<one line naming the dominant current plan shape>
 
-Recommended plan shape:
-- <alias/table>: <expected storage path and index/table access, or unavailable>
-- <join/operator>: <expected join/order/MPP behavior, or unavailable>
+Plan after:
+<one line naming the validated candidate shape, or the expected inferred Index shape plus not-reproduced status>
 
 Why:
 <one short paragraph naming the dominant mechanism and why this is the first action>
 
-Provenance:
-- Recommendation source: <history plan | local tidb env | production evidence | skill inference>
-- Strategy: <history plan cmp | skill infer | plan explore | none>
-- Validation status: <production verified | locally verified by EXPLAIN | locally explored by EXPLAIN EXPLORE | plan already recovered | rejected | inferred | not run>
-- Validation level: <inferred | plan_verified | prod_verified>
-- Advisory gate: <passed | failed | not applicable>
-- Selected candidate ID: <candidate id or none>
-- Production safety: review only; AutoX did not execute bindings, create indexes, modify TiFlash replicas, change statistics, or change production settings.
-
-Diagnosis metadata:
-- Diagnosis ID: <diagnosis_id>
-- Time range: <business time and UTC time>
-- Raw artifact cleanup: <cleaned | retained at user request: path | cleanup failed: path>
-- Redaction: <SQL literals removed | raw SQL included at user request | other>
-
 ## Plans Before & After
 
-Cluster and SQL:
-- Cluster: <cluster id/name>
-- TiDB version: <version>
-- Deployment type: <deployment type>
-- Digest: <digest>
-- SQL: <redacted SQL or unavailable>
-- Clinic URL: <Clinic or Dashboard URL for the cluster/digest/time range, or unavailable>
-
 Plan before:
-- Source: <slow log decoded_plan | production EXPLAIN ANALYZE | other production runtime evidence | unavailable>
-- Explain format: <decoded slow log plan | production EXPLAIN ANALYZE | other production runtime plan | unavailable>
-- Query time: <value or unavailable>
-- Plan digest: <plan digest or unavailable>
-- Full plan:
 ```text
 <complete production runtime prior plan, or exact missing-evidence reason>
 ```
 
 Plan after:
-- Source: <local baseline EXPLAIN | local candidate EXPLAIN | production EXPLAIN | EXPLAIN EXPLORE | unavailable>
-- Explain format: <EXPLAIN FORMAT='verbose' | EXPLAIN | decoded slow log plan | unavailable>
-- TiDB version: <version or unavailable>
-- Schema source: <source or unavailable>
-- Stats source: <source or unavailable>
-- Validation type: <local static EXPLAIN | EXPLAIN EXPLORE | production EXPLAIN | not run>
-- Validation result: <locally verified by EXPLAIN | locally explored by EXPLAIN EXPLORE | production verified | plan already recovered | rejected | inferred | not run | unavailable>
-- Validation level: <inferred | plan_verified | prod_verified | unavailable>
-- Estimated rows and cost: <values or unavailable>
-- Full plan:
 ```text
 <complete full-SQL plan, or exact validation blocker and best available complete EXPLAIN output;
 for inferred Index advice, state that the candidate plan was not reproduced>
@@ -278,19 +251,62 @@ for inferred Index advice, state that the candidate plan was not reproduced>
 
 ## Analysis
 
-Root cause:
-<one paragraph explaining the dominant bottleneck>
+Review-only SQL:
+Review only. Not executed by AutoX.
+```sql
+<verified candidate Binding SQL / Index DDL / TiFlash or MPP validation SQL>
+```
 
-Evidence:
-- Observed facts: <query-specific metrics, operators, tables, and runtime facts, or unavailable>
-- Inference: <mechanism derived from the observed facts, or unavailable>
+Context:
+- Cluster: <cluster id/name, version, and deployment type>
+- Digest: <digest>
+- SQL: <redacted SQL or unavailable>
+- Clinic URL: <Clinic or Dashboard URL for the cluster/digest/time range, or unavailable>
 
-Why the recommended action helps:
-<explain the expected effect on the diagnosed scan, join, ordering, cop, or engine mechanism>
+Observed evidence:
+<query-specific metrics, operators, tables, runtime facts, and evidence source>
 
-Caveats and next validation:
-- <runtime validation need, operational risk, supporting action, partial scope, blocker, cleanup issue, or none>
+Inference:
+<mechanism derived from the observed facts>
+
+Validation and risks:
+- Validation status: <production verified | locally verified | rejected | inferred | not run>
+- Validation level: <inferred | plan_verified | prod_verified>
+- Advisory gate: <passed | failed | not applicable>
+- Selected candidate ID: <candidate id>
+- Missing evidence or blocker: <exact blocker or none>
+- Risk and next validation: <operational risk and next step>
 ````
+
+For `Investigate non-optimizer bottleneck`, omit both plan summary fields and use:
+
+```markdown
+## Conclusion
+
+Action:
+Investigate non-optimizer bottleneck
+
+Why:
+<short diagnosis naming the runtime mechanism and why a plan change is not first>
+```
+
+For `No optimizer action`, use the same compact shape and explain why the current plan is already
+reasonable or why no optimizer candidate addresses the observed bottleneck:
+
+```markdown
+## Conclusion
+
+Action:
+No optimizer action
+
+Why:
+<short diagnosis and reason for no optimizer action>
+```
+
+For these two actions, keep the production plan and supporting evidence later in the report when
+needed for audit. In `Plans Before & After`, show the complete production plan and write
+`Plan after: none` when no plan-changing action was selected. Do not put plan summaries or
+`Review-only SQL: none` in `Conclusion`.
 
 For a historical hybrid TiFlash plan, state the exact storage and access shape per alias. Do not
 describe a broad all-TiFlash shape when only one alias should use TiFlash.
@@ -332,6 +348,10 @@ was instructed to remove.
 Do not mark the report complete unless all applicable checks pass:
 
 - the report has exactly the three required top-level headings;
+- `Conclusion` contains only the fields allowed for the selected action;
+- every action has a concise diagnostic `Why`, including `No optimizer action`;
+- plan-changing actions have one-line before/after summaries in `Conclusion`;
+- non-plan-changing actions do not have before/after summaries in `Conclusion`;
 - the recommended action uses the contracted vocabulary;
 - the recommendation follows the diagnosed runtime mechanism;
 - time breakdown and the full `actRows` path were considered;
@@ -345,7 +365,8 @@ Do not mark the report complete unless all applicable checks pass:
 - mixed-engine IndexJoin cases evaluated MPP as the primary mechanism;
 - system-table `MemTableScan` cases use `No optimizer action`;
 - every executable-looking SQL block is marked review-only;
-- cleanup and redaction state are accurate.
+- cleanup and redaction state are accurate in the retained handoff, without requiring verbose
+  cleanup metadata in the human report.
 
 ## Output Contract
 

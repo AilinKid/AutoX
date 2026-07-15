@@ -19,6 +19,7 @@ ALLOWED_ACTIONS = {
     "No optimizer action",
 }
 ALLOWED_VALIDATION_LEVELS = {"inferred", "plan_verified", "prod_verified"}
+PLAN_CHANGING_ACTIONS = {"Binding first", "Index first", "TiFlash / MPP first"}
 REPORT_HEADINGS = ["Conclusion", "Plans Before & After", "Analysis"]
 CANONICAL_REPORT_PATH = Path("report/report.md")
 
@@ -58,6 +59,69 @@ def require_keys(value: dict[str, Any], keys: tuple[str, ...], label: str,
             errors.append(f"{label} missing {key}")
 
 
+def report_section(report_text: str, heading: str) -> str:
+    match = re.search(
+        rf"^## {re.escape(heading)}\s*$\n(.*?)(?=^## |\Z)",
+        report_text,
+        re.MULTILINE | re.DOTALL,
+    )
+    return match.group(1).strip() if match else ""
+
+
+def validate_conclusion(action: str, report_text: str, errors: list[str],
+                        allow_legacy_report_format: bool) -> None:
+    if allow_legacy_report_format:
+        if action and f"Recommended action:\n{action}" not in report_text:
+            errors.append("report recommendation does not match result.json")
+        return
+
+    conclusion = report_section(report_text, "Conclusion")
+    if action in PLAN_CHANGING_ACTIONS:
+        pattern = re.compile(
+            rf"\AAction:\s*\n{re.escape(action)}\s*\n+"
+            r"Plan before:\s*\n([^\n]+)\s*\n+"
+            r"Plan after:\s*\n([^\n]+)\s*\n+"
+            r"Why:\s*\n(.+)\Z",
+            re.DOTALL,
+        )
+        if not pattern.fullmatch(conclusion):
+            errors.append(
+                "plan-changing Conclusion must contain only Action, one-line Plan before, "
+                "one-line Plan after, and Why"
+            )
+    else:
+        pattern = re.compile(
+            rf"\AAction:\s*\n{re.escape(action)}\s*\n+Why:\s*\n(.+)\Z",
+            re.DOTALL,
+        )
+        if not pattern.fullmatch(conclusion):
+            errors.append("non-plan-changing Conclusion must contain only Action and Why")
+
+
+def validate_compact_plan_section(report_text: str, errors: list[str]) -> None:
+    plans = report_section(report_text, "Plans Before & After")
+    for label in (
+        "Source:",
+        "Explain format:",
+        "Query time:",
+        "Plan digest:",
+        "TiDB version:",
+        "Schema source:",
+        "Stats source:",
+        "Validation type:",
+        "Validation result:",
+        "Validation level:",
+        "Estimated rows and cost:",
+        "Full plan:",
+    ):
+        if re.search(
+            rf"^\s*-\s*{re.escape(label)}\s*",
+            plans,
+            re.MULTILINE | re.IGNORECASE,
+        ):
+            errors.append(f"plan section contains verbose metadata field {label}")
+
+
 def validate_report(workspace: Path, result: dict[str, Any], errors: list[str],
                     allow_legacy_report_name: bool = False) -> str:
     raw_path = result.get("report_path")
@@ -84,7 +148,8 @@ def validate_report(workspace: Path, result: dict[str, Any], errors: list[str],
 
 def validate_completed(workspace: Path, result: dict[str, Any], report_text: str,
                        expected_digest: str | None, expected_diagnosis_id: str | None,
-                       errors: list[str], warnings: list[str]) -> None:
+                       errors: list[str], warnings: list[str],
+                       allow_legacy_report_format: bool = False) -> None:
     action = result.get("recommended_action")
     level = result.get("validation_level")
     if action not in ALLOWED_ACTIONS:
@@ -153,12 +218,19 @@ def validate_completed(workspace: Path, result: dict[str, Any], report_text: str
         if not retained and not leftovers:
             warnings.append("optional manifest cleanup lacks retained reason or leftover paths")
 
-    if action and f"Recommended action:\n{action}" not in report_text:
-        errors.append("report recommendation does not match result.json")
-    for marker in ("Plan before:", "Plan after:", "Validation level:",
-                   "Raw artifact cleanup:"):
+    validate_conclusion(
+        str(action or ""), report_text, errors, allow_legacy_report_format
+    )
+    for marker in ("Plan before:", "Plan after:", "Validation level:"):
         if marker not in report_text:
             errors.append(f"report missing {marker}")
+    if not allow_legacy_report_format:
+        validate_compact_plan_section(report_text, errors)
+        for marker in ("Observed evidence:", "Inference:", "Validation and risks:"):
+            if marker not in report_text:
+                errors.append(f"report missing {marker}")
+        if action not in PLAN_CHANGING_ACTIONS and "Review-only SQL:" in report_text:
+            errors.append("non-plan-changing report must omit Review-only SQL")
 
     if action in {"Binding first", "Index first", "TiFlash / MPP first"}:
         report_candidate = re.search(r"Selected candidate ID:\s*`?([^`\n]+)", report_text)
@@ -229,6 +301,9 @@ def validate(args: argparse.Namespace) -> tuple[dict[str, Any], list[str], list[
             args.diagnosis_id,
             errors,
             warnings,
+            allow_legacy_report_format=getattr(
+                args, "allow_legacy_report_format", False
+            ),
         )
     return result, errors, warnings
 
@@ -243,6 +318,11 @@ def parse_args() -> argparse.Namespace:
         "--allow-legacy-report-name",
         action="store_true",
         help="audit a case created before report/report.md became canonical",
+    )
+    parser.add_argument(
+        "--allow-legacy-report-format",
+        action="store_true",
+        help="audit a case created before the compact Conclusion contract",
     )
     parser.add_argument("--json", action="store_true", dest="json_output")
     return parser.parse_args()

@@ -167,6 +167,11 @@ The report must include:
 
 Do not add extra top-level headings.
 
+Keep `Conclusion` compact. Every action includes `Action` and a short diagnostic `Why`.
+Plan-changing actions also include one-line `Plan before` and `Plan after` summaries. Do not put
+SQL, provenance, validation metadata, diagnosis metadata, cluster metadata, cleanup state, or
+evidence lists in `Conclusion`.
+
 `Plan before` must use production runtime evidence when available, preferably the slow-log
 `decoded_plan`.
 

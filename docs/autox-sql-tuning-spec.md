@@ -463,12 +463,10 @@ TiFlash/MPP recommendations still require plan or production verification.
 
 ### Report Output
 
-AutoX must produce the human-readable report by filling the required Phase 7
-template in `skills/autox-optimize-sql/SKILL.md`. The template is the source of
-truth for report format. The report generator must not add, remove, rename, or
-reorder the template's top-level sections or field labels. Unknown values should
-be filled as `unknown`, `unavailable`, `not run`, or `none` instead of deleting
-fields.
+AutoX must produce the human-readable report by filling the template in
+`skills/autox-optimize-sql/workflow/final-report/SUBSKILL.md`. That template is
+the source of truth for report format. The report generator must not add,
+remove, rename, or reorder its top-level sections.
 
 The required top-level sections are:
 
@@ -482,18 +480,20 @@ DDL, TiFlash validation SQL, or other production SQL.
 
 The template requires, at minimum:
 
-- recommended first action;
-- review-only SQL, or `none`;
-- recommended plan shape;
-- provenance and validation level;
-- diagnosis metadata;
-- cluster, SQL, and Clinic URL;
+- a compact `Conclusion` containing `Action` and diagnostic `Why`;
+- one-line before/after plan summaries in `Conclusion` only for plan-changing actions;
+- review-only SQL for a selected optimizer action;
+- cluster, SQL, and Clinic URL after `Conclusion`;
 - complete slow-log before plan in a fenced markdown code block;
 - complete local `EXPLAIN FORMAT='verbose'` after plan in a fenced markdown code
   block when available;
-- root cause;
 - observed facts and inference;
-- caveats and next validation.
+- validation level, caveats, and next validation after `Conclusion`.
+
+Do not print source, explain format, query time, plan digest, TiDB version,
+schema/stats source, validation type, or estimated-cost field lists immediately
+before plan blocks. Preserve such provenance in structured artifacts and include
+only decision-relevant evidence in `Analysis`.
 
 ### Structured Output
 
