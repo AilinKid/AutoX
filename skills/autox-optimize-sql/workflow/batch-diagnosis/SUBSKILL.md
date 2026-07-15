@@ -245,8 +245,8 @@ The post-cleanup gate validates `result.json`, the focused report, identity, rec
 validation level, cleanup state, report structure, and the optional compact manifest when present.
 New cases must pass without compatibility flags; `--allow-legacy-report-name` is only for auditing
 reports created before the canonical `report/report.md` contract, and
-`--allow-legacy-report-format` is only for auditing reports created before the compact Conclusion
-contract.
+`--allow-legacy-report-format` is only for auditing reports created before the current
+action-specific contract.
 It must not require a child manifest or other persistent case state, and it must not require
 `plans/production_before`, `decision`, evidence files, or candidate artifacts when the compact
 manifest says raw artifacts were cleaned.

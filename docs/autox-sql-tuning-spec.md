@@ -468,10 +468,8 @@ AutoX must produce the human-readable report by filling the template in
 the source of truth for report format. The report generator must not add,
 remove, rename, or reorder its top-level sections.
 
-The required top-level sections are:
-
-1. `Conclusion`
-2. `Analysis`
+Plan-changing actions require `Conclusion`, `Plans Before & After`, and `Analysis`, in that order.
+Other actions require `Conclusion` and `Analysis` and must omit the plans section.
 
 The template also defines the SQL safety boundary: all SQL shown in the report
 is review-only. AutoX v0 does not execute any recommended Binding SQL, Index
@@ -479,11 +477,11 @@ DDL, TiFlash validation SQL, or other production SQL.
 
 The template requires, at minimum:
 
-- a compact `Conclusion` containing `Action` and diagnostic `Why`;
-- complete before/after plans in `Conclusion` only for plan-changing actions;
-- no duplicate plan section;
-- review-only SQL for a selected optimizer action;
-- cluster, SQL, and Clinic URL after `Conclusion`;
+- a compact plan-changing `Conclusion` containing `Action` and review-only SQL;
+- a compact non-plan-changing `Conclusion` containing only `Action`;
+- complete before/after plans only in `Plans Before & After` for plan-changing actions;
+- diagnostic `Why` at the start of `Analysis` for every action;
+- cluster, SQL, and Clinic URL within observed evidence when available;
 - complete slow-log before plan in a fenced markdown code block;
 - complete local `EXPLAIN FORMAT='verbose'` after plan in a fenced markdown code
   block when available;

@@ -159,17 +159,12 @@ advisory gate do not justify an optimizer action.
 The final report is owned by `workflow/final-report/SUBSKILL.md`.
 Write it to the canonical artifact path `report/report.md`; do not choose another filename.
 
-The report must include:
+Plan-changing reports must include `## Conclusion`, `## Plans Before & After`, and `## Analysis`.
+Non-plan-changing reports must omit the plans section. Do not add extra top-level headings.
 
-- `## Conclusion`
-- `## Analysis`
-
-Do not add extra top-level headings.
-
-Keep `Conclusion` compact. Every action includes `Action` and a short diagnostic `Why`.
-Plan-changing actions also include the complete `Plan before` and `Plan after`; do not duplicate
-them in another section. Do not put SQL, provenance, validation metadata, diagnosis metadata,
-cluster metadata, cleanup state, or evidence lists in `Conclusion`.
+Keep `Conclusion` compact. Plan-changing actions include only `Action` and concrete review-only
+SQL. Non-plan-changing actions include only `Action`. Put complete plans only in `Plans Before &
+After`, and put `Why`, evidence, inference, validation, and risks in `Analysis`.
 
 `Plan before` must use production runtime evidence when available, preferably the slow-log
 `decoded_plan`.

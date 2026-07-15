@@ -20,8 +20,8 @@ ALLOWED_ACTIONS = {
 }
 ALLOWED_VALIDATION_LEVELS = {"inferred", "plan_verified", "prod_verified"}
 PLAN_CHANGING_ACTIONS = {"Binding first", "Index first", "TiFlash / MPP first"}
-REPORT_HEADINGS = ["Conclusion", "Analysis"]
-LEGACY_REPORT_HEADINGS = ["Conclusion", "Plans Before & After", "Analysis"]
+PLAN_REPORT_HEADINGS = ["Conclusion", "Plans Before & After", "Analysis"]
+NON_PLAN_REPORT_HEADINGS = ["Conclusion", "Analysis"]
 CANONICAL_REPORT_PATH = Path("report/report.md")
 
 
@@ -72,7 +72,8 @@ def report_section(report_text: str, heading: str) -> str:
 def validate_conclusion(action: str, report_text: str, errors: list[str],
                         allow_legacy_report_format: bool) -> None:
     if allow_legacy_report_format:
-        if action and f"Recommended action:\n{action}" not in report_text:
+        action_markers = (f"Action:\n{action}", f"Recommended action:\n{action}")
+        if action and not any(marker in report_text for marker in action_markers):
             errors.append("report recommendation does not match result.json")
         return
 
@@ -80,23 +81,52 @@ def validate_conclusion(action: str, report_text: str, errors: list[str],
     if action in PLAN_CHANGING_ACTIONS:
         pattern = re.compile(
             rf"\AAction:\s*\n{re.escape(action)}\s*\n+"
-            r"Plan before:\s*\n```text[ \t]*\n(.+?)\n```\s*\n+"
-            r"Plan after:\s*\n```text[ \t]*\n(.+?)\n```\s*\n+"
-            r"Why:\s*\n(.+)\Z",
+            r"Review-only SQL:\s*\n"
+            r"Review only\. Not executed by AutoX\.\s*\n"
+            r"```sql[ \t]*\n(.+?)\n```\Z",
             re.DOTALL,
         )
-        if not pattern.fullmatch(conclusion):
+        match = pattern.fullmatch(conclusion)
+        if not match:
             errors.append(
-                "plan-changing Conclusion must contain only Action, complete Plan before, "
-                "complete Plan after, and Why"
+                "plan-changing Conclusion must contain only Action and concrete review-only SQL"
             )
+        elif match.group(1).strip().lower() == "none":
+            errors.append("plan-changing Conclusion must contain concrete review-only SQL")
     else:
-        pattern = re.compile(
-            rf"\AAction:\s*\n{re.escape(action)}\s*\n+Why:\s*\n(.+)\Z",
-            re.DOTALL,
-        )
+        pattern = re.compile(rf"\AAction:\s*\n{re.escape(action)}\Z")
         if not pattern.fullmatch(conclusion):
-            errors.append("non-plan-changing Conclusion must contain only Action and Why")
+            errors.append("non-plan-changing Conclusion must contain only Action")
+
+
+def validate_plans(action: str, report_text: str, errors: list[str]) -> None:
+    if action not in PLAN_CHANGING_ACTIONS:
+        return
+    plans = report_section(report_text, "Plans Before & After")
+    pattern = re.compile(
+        r"\APlan before:\s*\n```text[ \t]*\n(.+?)\n```\s*\n+"
+        r"Plan after:\s*\n```text[ \t]*\n(.+?)\n```\Z",
+        re.DOTALL,
+    )
+    if not pattern.fullmatch(plans):
+        errors.append(
+            "Plans Before & After must contain only complete Plan before and Plan after blocks"
+        )
+
+
+def validate_analysis(report_text: str, errors: list[str]) -> None:
+    analysis = report_section(report_text, "Analysis")
+    pattern = re.compile(
+        r"\AWhy:\s*\n(.+?)\n+"
+        r"Observed evidence:\s*\n(.+?)\n+"
+        r"Inference:\s*\n(.+?)\n+"
+        r"Validation and risks:\s*\n(.+)\Z",
+        re.DOTALL,
+    )
+    if not pattern.fullmatch(analysis):
+        errors.append(
+            "Analysis must contain only Why, Observed evidence, Inference, and Validation and risks"
+        )
 
 
 def validate_report(workspace: Path, result: dict[str, Any], errors: list[str],
@@ -119,8 +149,17 @@ def validate_report(workspace: Path, result: dict[str, Any], errors: list[str],
         errors.append(f"report_path is not readable: {exc}")
         return ""
     headings = re.findall(r"^## (.+)$", text, re.MULTILINE)
-    expected_headings = LEGACY_REPORT_HEADINGS if allow_legacy_report_format else REPORT_HEADINGS
-    if headings != expected_headings:
+    action = result.get("recommended_action")
+    expected_headings = (
+        PLAN_REPORT_HEADINGS if action in PLAN_CHANGING_ACTIONS else NON_PLAN_REPORT_HEADINGS
+    )
+    legacy_headings = (PLAN_REPORT_HEADINGS, NON_PLAN_REPORT_HEADINGS)
+    headings_valid = (
+        headings in legacy_headings
+        if allow_legacy_report_format
+        else headings == expected_headings
+    )
+    if not headings_valid:
         errors.append(f"invalid top-level report headings: {headings}")
     return text
 
@@ -200,6 +239,9 @@ def validate_completed(workspace: Path, result: dict[str, Any], report_text: str
     validate_conclusion(
         str(action or ""), report_text, errors, allow_legacy_report_format
     )
+    if not allow_legacy_report_format:
+        validate_plans(str(action or ""), report_text, errors)
+        validate_analysis(report_text, errors)
     markers = ["Validation level:"]
     if action in PLAN_CHANGING_ACTIONS or allow_legacy_report_format:
         markers.extend(("Plan before:", "Plan after:"))
@@ -207,11 +249,12 @@ def validate_completed(workspace: Path, result: dict[str, Any], report_text: str
         if marker not in report_text:
             errors.append(f"report missing {marker}")
     if not allow_legacy_report_format:
-        for marker in ("Observed evidence:", "Inference:", "Validation and risks:"):
-            if marker not in report_text:
-                errors.append(f"report missing {marker}")
         if action not in PLAN_CHANGING_ACTIONS and "Review-only SQL:" in report_text:
             errors.append("non-plan-changing report must omit Review-only SQL")
+        if action not in PLAN_CHANGING_ACTIONS and re.search(
+            r"^Plan (?:before|after):", report_text, re.MULTILINE
+        ):
+            errors.append("non-plan-changing report must omit before/after plans")
 
     if action in {"Binding first", "Index first", "TiFlash / MPP first"}:
         report_candidate = re.search(r"Selected candidate ID:\s*`?([^`\n]+)", report_text)
@@ -304,7 +347,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--allow-legacy-report-format",
         action="store_true",
-        help="audit a case created before the compact Conclusion contract",
+        help="audit a case created before the current action-specific report contract",
     )
     parser.add_argument("--json", action="store_true", dest="json_output")
     return parser.parse_args()

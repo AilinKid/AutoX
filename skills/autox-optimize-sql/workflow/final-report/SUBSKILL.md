@@ -195,28 +195,28 @@ inside `Caveats and next validation`. Do not create separate top-level sections 
 
 ## Exact Report Template
 
-The final report must have exactly these two top-level headings, in this order:
+For `Binding first`, `Index first`, and `TiFlash / MPP first`, the final report must have exactly
+these three top-level headings, in this order:
 
 1. `## Conclusion`
-2. `## Analysis`
+2. `## Plans Before & After`
+3. `## Analysis`
+
+For `No optimizer action` and `Investigate non-optimizer bottleneck`, omit the plans section and
+use exactly `## Conclusion` followed by `## Analysis`.
 
 Do not add a preface, appendix, process log, or another top-level heading. Do not use first-person
 workflow narration.
 
-Treat `Conclusion` as the default reading surface:
+Treat `Conclusion` as the default decision surface. A plan-changing action contains only `Action`
+and concrete `Review-only SQL`. A non-plan-changing action contains only `Action`; its diagnostic
+reason belongs at the start of `Analysis`.
 
-- `No optimizer action` and `Investigate non-optimizer bottleneck` contain only `Action` and
-  `Why`. `Why` must briefly state the diagnosed mechanism and why no plan-changing action is
-  justified.
-- `Binding first`, `Index first`, and `TiFlash / MPP first` contain only `Action`, the complete
-  `Plan before`, the complete `Plan after`, and `Why`.
-- Do not put SQL, provenance, validation metadata, diagnosis IDs, time ranges, cleanup state,
-  redaction state, cluster metadata, or evidence lists in `Conclusion`.
-
-Keep complete plan trees in `Conclusion` for plan-changing actions. Do not precede them with
-source, explain format, query time, plan digest, TiDB version, schema source, stats source,
-validation type, or estimated cost field lists. Put only decision-relevant context, observed
-evidence, inference, validation, risks, and missing evidence in `Analysis`.
+Keep complete plan trees only in `Plans Before & After`. Do not precede them with source, explain
+format, query time, plan digest, TiDB version, schema source, stats source, validation type, or
+estimated cost field lists. Put `Why`, observed evidence, inference, validation, risks, and missing
+evidence in `Analysis`. Include the Clinic URL and other decision-relevant context in observed
+evidence when available instead of adding another fixed report field.
 
 Use this template for a plan-changing action:
 
@@ -225,6 +225,14 @@ Use this template for a plan-changing action:
 
 Action:
 <Binding first | Index first | TiFlash / MPP first>
+
+Review-only SQL:
+Review only. Not executed by AutoX.
+```sql
+<verified candidate Binding SQL / Index DDL / TiFlash or MPP validation SQL>
+```
+
+## Plans Before & After
 
 Plan before:
 ```text
@@ -237,25 +245,13 @@ Plan after:
 for inferred Index advice, state that the candidate plan was not reproduced>
 ```
 
+## Analysis
+
 Why:
 <one short paragraph naming the dominant mechanism and why this is the first action>
 
-## Analysis
-
-Review-only SQL:
-Review only. Not executed by AutoX.
-```sql
-<verified candidate Binding SQL / Index DDL / TiFlash or MPP validation SQL>
-```
-
-Context:
-- Cluster: <cluster id/name, version, and deployment type>
-- Digest: <digest>
-- SQL: <redacted SQL or unavailable>
-- Clinic URL: <Clinic or Dashboard URL for the cluster/digest/time range, or unavailable>
-
 Observed evidence:
-<query-specific metrics, operators, tables, runtime facts, and evidence source>
+<query-specific metrics, operators, tables, runtime facts, evidence source, and Clinic URL>
 
 Inference:
 <mechanism derived from the observed facts>
@@ -269,7 +265,7 @@ Validation and risks:
 - Risk and next validation: <operational risk and next step>
 ````
 
-For `Investigate non-optimizer bottleneck`, omit both plan summary fields and use:
+For `Investigate non-optimizer bottleneck`, omit the plans section and use:
 
 ```markdown
 ## Conclusion
@@ -277,8 +273,19 @@ For `Investigate non-optimizer bottleneck`, omit both plan summary fields and us
 Action:
 Investigate non-optimizer bottleneck
 
+## Analysis
+
 Why:
 <short diagnosis naming the runtime mechanism and why a plan change is not first>
+
+Observed evidence:
+<key observed facts and Clinic URL when available>
+
+Inference:
+<mechanism derived from the observed facts>
+
+Validation and risks:
+<missing evidence, operational risk, and next step>
 ```
 
 For `No optimizer action`, use the same compact shape and explain why the current plan is already
@@ -290,12 +297,23 @@ reasonable or why no optimizer candidate addresses the observed bottleneck:
 Action:
 No optimizer action
 
+## Analysis
+
 Why:
 <short diagnosis and reason for no optimizer action>
+
+Observed evidence:
+<key observed facts and Clinic URL when available>
+
+Inference:
+<mechanism derived from the observed facts>
+
+Validation and risks:
+<missing evidence, operational risk, and next step>
 ```
 
 For these two actions, omit `Plan before`, `Plan after`, and `Review-only SQL`. Keep the concise
-diagnosis, observed plan evidence, inference, and any blocker in `Why` and `Analysis`.
+diagnosis, observed plan evidence, inference, and any blocker in `Analysis`.
 
 For a historical hybrid TiFlash plan, state the exact storage and access shape per alias. Do not
 describe a broad all-TiFlash shape when only one alias should use TiFlash.
@@ -336,12 +354,12 @@ was instructed to remove.
 
 Do not mark the report complete unless all applicable checks pass:
 
-- the report has exactly the two required top-level headings;
+- the report has exactly the required top-level headings for the selected action;
 - `Conclusion` contains only the fields allowed for the selected action;
-- every action has a concise diagnostic `Why`, including `No optimizer action`;
-- plan-changing actions have complete before/after plans in `Conclusion` without a duplicate plan
-  section;
-- non-plan-changing actions do not have before/after plans in `Conclusion`;
+- every action has a concise diagnostic `Why` at the start of `Analysis`, including
+  `No optimizer action`;
+- plan-changing actions have complete before/after plans only in `Plans Before & After`;
+- non-plan-changing actions omit `Plans Before & After` and review-only SQL;
 - the recommended action uses the contracted vocabulary;
 - the recommendation follows the diagnosed runtime mechanism;
 - time breakdown and the full `actRows` path were considered;

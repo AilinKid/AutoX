@@ -42,6 +42,13 @@ class ValidateCaseTest(unittest.TestCase):
             conclusion = f"""Action:
 {action}
 
+Review-only SQL:
+Review only. Not executed by AutoX.
+```sql
+CREATE INDEX idx_a ON t (a);
+```"""
+            plans = """\n\n## Plans Before & After
+
 Plan before:
 ```text
 IndexLookUp with table-row fetch
@@ -50,32 +57,22 @@ IndexLookUp with table-row fetch
 Plan after:
 ```text
 Covering IndexReader; candidate plan was not reproduced
-```
-
-Why:
-The candidate removes the diagnosed table-row fetch while preserving the required order."""
-            review_sql = """Review-only SQL:
-Review only. Not executed by AutoX.
-```sql
-CREATE INDEX idx_a ON t (a);
-```
-
-"""
+```"""
         else:
             conclusion = f"""Action:
-{action}
-
-Why:
-The observed plan already uses the useful access path, so no plan-changing action addresses the dominant runtime mechanism."""
-            review_sql = ""
+{action}"""
+            plans = ""
         (report_dir / "report.md").write_text(
             f"""## Conclusion
 
-{conclusion}
+{conclusion}{plans}
 
 ## Analysis
 
-{review_sql}Observed evidence:
+Why:
+The candidate targets the diagnosed runtime mechanism, or no plan-changing action is justified by the observed plan.
+
+Observed evidence:
 The production plan performs a table-row fetch.
 
 Inference:
@@ -171,14 +168,14 @@ Validation and risks:
         report = workspace / "report" / "report.md"
         text = report.read_text(encoding="utf-8")
         text = text.replace(
-            "\nWhy:\nThe observed plan already uses the useful access path, so no "
-            "plan-changing action addresses the dominant runtime mechanism.",
+            "\nWhy:\nThe candidate targets the diagnosed runtime mechanism, or no "
+            "plan-changing action is justified by the observed plan.",
             "",
             1,
         )
         report.write_text(text, encoding="utf-8")
         self.assertIn(
-            "non-plan-changing Conclusion must contain only Action and Why",
+            "Analysis must contain only Why, Observed evidence, Inference, and Validation and risks",
             self.validate(workspace),
         )
 
@@ -187,13 +184,13 @@ Validation and risks:
         report = workspace / "report" / "report.md"
         text = report.read_text(encoding="utf-8")
         text = text.replace(
-            "\nWhy:\nThe observed plan",
-            "\nPlan before:\nIndexLookUp\n\nWhy:\nThe observed plan",
+            "No optimizer action\n\n## Analysis",
+            "No optimizer action\n\nPlan before:\nIndexLookUp\n\n## Analysis",
             1,
         )
         report.write_text(text, encoding="utf-8")
         self.assertIn(
-            "non-plan-changing Conclusion must contain only Action and Why",
+            "non-plan-changing Conclusion must contain only Action",
             self.validate(workspace),
         )
 
@@ -209,8 +206,48 @@ Validation and risks:
         )
         report.write_text(text, encoding="utf-8")
         self.assertIn(
-            "plan-changing Conclusion must contain only Action, complete Plan before, "
-            "complete Plan after, and Why",
+            "Plans Before & After must contain only complete Plan before and Plan after blocks",
+            self.validate(workspace),
+        )
+
+    def test_plan_action_requires_review_sql_in_conclusion(self) -> None:
+        workspace = self.write_case("Index first", "inferred", "passed")
+        report = workspace / "report" / "report.md"
+        text = report.read_text(encoding="utf-8")
+        sql_start = text.index("\nReview-only SQL:")
+        plans_start = text.index("\n## Plans Before & After")
+        review_sql = text[sql_start:plans_start]
+        text = text[:sql_start] + text[plans_start:]
+        text = text.replace("\n## Analysis\n", f"\n## Analysis\n{review_sql}\n", 1)
+        report.write_text(text, encoding="utf-8")
+        self.assertIn(
+            "plan-changing Conclusion must contain only Action and concrete review-only SQL",
+            self.validate(workspace),
+        )
+
+    def test_plan_action_rejects_review_sql_none(self) -> None:
+        workspace = self.write_case("Binding first", "plan_verified", "passed")
+        report = workspace / "report" / "report.md"
+        text = report.read_text(encoding="utf-8")
+        text = text.replace("CREATE INDEX idx_a ON t (a);", "none", 1)
+        report.write_text(text, encoding="utf-8")
+        self.assertIn(
+            "plan-changing Conclusion must contain concrete review-only SQL",
+            self.validate(workspace),
+        )
+
+    def test_no_action_rejects_plans_in_analysis(self) -> None:
+        workspace = self.write_case("No optimizer action", "inferred", None)
+        report = workspace / "report" / "report.md"
+        text = report.read_text(encoding="utf-8")
+        text = text.replace(
+            "Observed evidence:\n",
+            "Observed evidence:\nPlan before: IndexLookUp\n",
+            1,
+        )
+        report.write_text(text, encoding="utf-8")
+        self.assertIn(
+            "non-plan-changing report must omit before/after plans",
             self.validate(workspace),
         )
 
@@ -225,8 +262,7 @@ Validation and risks:
         )
         report.write_text(text, encoding="utf-8")
         self.assertIn(
-            "plan-changing Conclusion must contain only Action, complete Plan before, "
-            "complete Plan after, and Why",
+            "Plans Before & After must contain only complete Plan before and Plan after blocks",
             self.validate(workspace),
         )
 
@@ -237,28 +273,33 @@ Validation and risks:
         analysis_start = text.index("\n## Analysis")
         legacy = """## Conclusion
 
-Recommended action:
+Action:
 Index first
 
-Review-only SQL:
-Review only. Not executed by AutoX.
-```sql
-CREATE INDEX idx_a ON t (a);
+Plan before:
+```text
+IndexLookUp with table-row fetch
 ```
 
-## Plans Before & After
-
-Plan before:
-complete production plan
-
 Plan after:
-The candidate plan was not reproduced.
-""" + text[analysis_start:]
+```text
+Covering IndexReader; candidate plan was not reproduced
+```
+
+Why:
+The candidate removes the diagnosed table-row fetch.
+""" + text[analysis_start:].replace(
+            "## Analysis\n\nWhy:",
+            "## Analysis\n\nReview-only SQL:\nReview only. Not executed by AutoX.\n"
+            "```sql\nCREATE INDEX idx_a ON t (a);\n```\n\nWhy:",
+            1,
+        )
         report.write_text(legacy, encoding="utf-8")
-        self.assertIn(
-            "plan-changing Conclusion must contain only Action, complete Plan before, "
-            "complete Plan after, and Why",
-            self.validate(workspace),
+        self.assertTrue(
+            any(
+                error.startswith("invalid top-level report headings")
+                for error in self.validate(workspace)
+            )
         )
         self.assertEqual(
             [],

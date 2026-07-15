@@ -299,9 +299,11 @@ manifest should point to that artifact instead of copying all details.
 - use only the contracted recommendation vocabulary;
 - write the customer-facing report to `<workspace>/report/report.md`; other report filenames are
   invalid for new cases;
-- keep `Conclusion` to `Action` and diagnostic `Why`, plus complete before/after plans only for
-  Binding, Index, or TiFlash/MPP actions;
-- do not duplicate plans in a separate top-level section;
+- keep plan-changing `Conclusion` to `Action` and concrete review-only SQL, and keep
+  non-plan-changing `Conclusion` to `Action`;
+- put complete before/after plans only in `Plans Before & After` for Binding, Index, or TiFlash/MPP
+  actions, and omit that section for other actions;
+- put diagnostic `Why`, evidence, inference, validation, and risks in `Analysis`;
 - keep plan source, validation, schema/stats, provenance, cleanup, and other audit metadata out of
   `Conclusion` and out of the full-plan preamble;
 - read complete plan, candidate, and comparison artifacts by path instead of expecting them to be
