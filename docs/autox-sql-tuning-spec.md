@@ -471,8 +471,7 @@ remove, rename, or reorder its top-level sections.
 The required top-level sections are:
 
 1. `Conclusion`
-2. `Plans Before & After`
-3. `Analysis`
+2. `Analysis`
 
 The template also defines the SQL safety boundary: all SQL shown in the report
 is review-only. AutoX v0 does not execute any recommended Binding SQL, Index
@@ -481,7 +480,8 @@ DDL, TiFlash validation SQL, or other production SQL.
 The template requires, at minimum:
 
 - a compact `Conclusion` containing `Action` and diagnostic `Why`;
-- one-line before/after plan summaries in `Conclusion` only for plan-changing actions;
+- complete before/after plans in `Conclusion` only for plan-changing actions;
+- no duplicate plan section;
 - review-only SQL for a selected optimizer action;
 - cluster, SQL, and Clinic URL after `Conclusion`;
 - complete slow-log before plan in a fenced markdown code block;

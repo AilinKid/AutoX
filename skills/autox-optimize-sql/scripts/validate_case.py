@@ -20,7 +20,8 @@ ALLOWED_ACTIONS = {
 }
 ALLOWED_VALIDATION_LEVELS = {"inferred", "plan_verified", "prod_verified"}
 PLAN_CHANGING_ACTIONS = {"Binding first", "Index first", "TiFlash / MPP first"}
-REPORT_HEADINGS = ["Conclusion", "Plans Before & After", "Analysis"]
+REPORT_HEADINGS = ["Conclusion", "Analysis"]
+LEGACY_REPORT_HEADINGS = ["Conclusion", "Plans Before & After", "Analysis"]
 CANONICAL_REPORT_PATH = Path("report/report.md")
 
 
@@ -79,15 +80,15 @@ def validate_conclusion(action: str, report_text: str, errors: list[str],
     if action in PLAN_CHANGING_ACTIONS:
         pattern = re.compile(
             rf"\AAction:\s*\n{re.escape(action)}\s*\n+"
-            r"Plan before:\s*\n([^\n]+)\s*\n+"
-            r"Plan after:\s*\n([^\n]+)\s*\n+"
+            r"Plan before:\s*\n```text[ \t]*\n(.+?)\n```\s*\n+"
+            r"Plan after:\s*\n```text[ \t]*\n(.+?)\n```\s*\n+"
             r"Why:\s*\n(.+)\Z",
             re.DOTALL,
         )
         if not pattern.fullmatch(conclusion):
             errors.append(
-                "plan-changing Conclusion must contain only Action, one-line Plan before, "
-                "one-line Plan after, and Why"
+                "plan-changing Conclusion must contain only Action, complete Plan before, "
+                "complete Plan after, and Why"
             )
     else:
         pattern = re.compile(
@@ -98,32 +99,9 @@ def validate_conclusion(action: str, report_text: str, errors: list[str],
             errors.append("non-plan-changing Conclusion must contain only Action and Why")
 
 
-def validate_compact_plan_section(report_text: str, errors: list[str]) -> None:
-    plans = report_section(report_text, "Plans Before & After")
-    for label in (
-        "Source:",
-        "Explain format:",
-        "Query time:",
-        "Plan digest:",
-        "TiDB version:",
-        "Schema source:",
-        "Stats source:",
-        "Validation type:",
-        "Validation result:",
-        "Validation level:",
-        "Estimated rows and cost:",
-        "Full plan:",
-    ):
-        if re.search(
-            rf"^\s*-\s*{re.escape(label)}\s*",
-            plans,
-            re.MULTILINE | re.IGNORECASE,
-        ):
-            errors.append(f"plan section contains verbose metadata field {label}")
-
-
 def validate_report(workspace: Path, result: dict[str, Any], errors: list[str],
-                    allow_legacy_report_name: bool = False) -> str:
+                    allow_legacy_report_name: bool = False,
+                    allow_legacy_report_format: bool = False) -> str:
     raw_path = result.get("report_path")
     if not isinstance(raw_path, str) or not raw_path:
         errors.append("result.json missing report_path")
@@ -141,7 +119,8 @@ def validate_report(workspace: Path, result: dict[str, Any], errors: list[str],
         errors.append(f"report_path is not readable: {exc}")
         return ""
     headings = re.findall(r"^## (.+)$", text, re.MULTILINE)
-    if headings != REPORT_HEADINGS:
+    expected_headings = LEGACY_REPORT_HEADINGS if allow_legacy_report_format else REPORT_HEADINGS
+    if headings != expected_headings:
         errors.append(f"invalid top-level report headings: {headings}")
     return text
 
@@ -221,11 +200,13 @@ def validate_completed(workspace: Path, result: dict[str, Any], report_text: str
     validate_conclusion(
         str(action or ""), report_text, errors, allow_legacy_report_format
     )
-    for marker in ("Plan before:", "Plan after:", "Validation level:"):
+    markers = ["Validation level:"]
+    if action in PLAN_CHANGING_ACTIONS or allow_legacy_report_format:
+        markers.extend(("Plan before:", "Plan after:"))
+    for marker in markers:
         if marker not in report_text:
             errors.append(f"report missing {marker}")
     if not allow_legacy_report_format:
-        validate_compact_plan_section(report_text, errors)
         for marker in ("Observed evidence:", "Inference:", "Validation and risks:"):
             if marker not in report_text:
                 errors.append(f"report missing {marker}")
@@ -286,6 +267,7 @@ def validate(args: argparse.Namespace) -> tuple[dict[str, Any], list[str], list[
         result,
         errors,
         allow_legacy_report_name=getattr(args, "allow_legacy_report_name", False),
+        allow_legacy_report_format=getattr(args, "allow_legacy_report_format", False),
     )
     if status == "failed":
         if not result.get("failed_stage"):

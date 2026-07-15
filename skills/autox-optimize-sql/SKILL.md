@@ -162,15 +162,14 @@ Write it to the canonical artifact path `report/report.md`; do not choose anothe
 The report must include:
 
 - `## Conclusion`
-- `## Plans Before & After`
 - `## Analysis`
 
 Do not add extra top-level headings.
 
 Keep `Conclusion` compact. Every action includes `Action` and a short diagnostic `Why`.
-Plan-changing actions also include one-line `Plan before` and `Plan after` summaries. Do not put
-SQL, provenance, validation metadata, diagnosis metadata, cluster metadata, cleanup state, or
-evidence lists in `Conclusion`.
+Plan-changing actions also include the complete `Plan before` and `Plan after`; do not duplicate
+them in another section. Do not put SQL, provenance, validation metadata, diagnosis metadata,
+cluster metadata, cleanup state, or evidence lists in `Conclusion`.
 
 `Plan before` must use production runtime evidence when available, preferably the slow-log
 `decoded_plan`.

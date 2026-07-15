@@ -195,11 +195,10 @@ inside `Caveats and next validation`. Do not create separate top-level sections 
 
 ## Exact Report Template
 
-The final report must have exactly these three top-level headings, in this order:
+The final report must have exactly these two top-level headings, in this order:
 
 1. `## Conclusion`
-2. `## Plans Before & After`
-3. `## Analysis`
+2. `## Analysis`
 
 Do not add a preface, appendix, process log, or another top-level heading. Do not use first-person
 workflow narration.
@@ -209,15 +208,15 @@ Treat `Conclusion` as the default reading surface:
 - `No optimizer action` and `Investigate non-optimizer bottleneck` contain only `Action` and
   `Why`. `Why` must briefly state the diagnosed mechanism and why no plan-changing action is
   justified.
-- `Binding first`, `Index first`, and `TiFlash / MPP first` contain only `Action`, one-line
-  `Plan before`, one-line `Plan after`, and `Why`.
+- `Binding first`, `Index first`, and `TiFlash / MPP first` contain only `Action`, the complete
+  `Plan before`, the complete `Plan after`, and `Why`.
 - Do not put SQL, provenance, validation metadata, diagnosis IDs, time ranges, cleanup state,
   redaction state, cluster metadata, or evidence lists in `Conclusion`.
 
-Keep complete plan trees in `Plans Before & After`. Do not precede them with source, explain
-format, query time, plan digest, TiDB version, schema source, stats source, validation type, or
-estimated cost field lists. Put only decision-relevant context, observed evidence, inference,
-validation, risks, and missing evidence in `Analysis`.
+Keep complete plan trees in `Conclusion` for plan-changing actions. Do not precede them with
+source, explain format, query time, plan digest, TiDB version, schema source, stats source,
+validation type, or estimated cost field lists. Put only decision-relevant context, observed
+evidence, inference, validation, risks, and missing evidence in `Analysis`.
 
 Use this template for a plan-changing action:
 
@@ -226,17 +225,6 @@ Use this template for a plan-changing action:
 
 Action:
 <Binding first | Index first | TiFlash / MPP first>
-
-Plan before:
-<one line naming the dominant current plan shape>
-
-Plan after:
-<one line naming the validated candidate shape, or the expected inferred Index shape plus not-reproduced status>
-
-Why:
-<one short paragraph naming the dominant mechanism and why this is the first action>
-
-## Plans Before & After
 
 Plan before:
 ```text
@@ -248,6 +236,9 @@ Plan after:
 <complete full-SQL plan, or exact validation blocker and best available complete EXPLAIN output;
 for inferred Index advice, state that the candidate plan was not reproduced>
 ```
+
+Why:
+<one short paragraph naming the dominant mechanism and why this is the first action>
 
 ## Analysis
 
@@ -303,10 +294,8 @@ Why:
 <short diagnosis and reason for no optimizer action>
 ```
 
-For these two actions, keep the production plan and supporting evidence later in the report when
-needed for audit. In `Plans Before & After`, show the complete production plan and write
-`Plan after: none` when no plan-changing action was selected. Do not put plan summaries or
-`Review-only SQL: none` in `Conclusion`.
+For these two actions, omit `Plan before`, `Plan after`, and `Review-only SQL`. Keep the concise
+diagnosis, observed plan evidence, inference, and any blocker in `Why` and `Analysis`.
 
 For a historical hybrid TiFlash plan, state the exact storage and access shape per alias. Do not
 describe a broad all-TiFlash shape when only one alias should use TiFlash.
@@ -347,17 +336,18 @@ was instructed to remove.
 
 Do not mark the report complete unless all applicable checks pass:
 
-- the report has exactly the three required top-level headings;
+- the report has exactly the two required top-level headings;
 - `Conclusion` contains only the fields allowed for the selected action;
 - every action has a concise diagnostic `Why`, including `No optimizer action`;
-- plan-changing actions have one-line before/after summaries in `Conclusion`;
-- non-plan-changing actions do not have before/after summaries in `Conclusion`;
+- plan-changing actions have complete before/after plans in `Conclusion` without a duplicate plan
+  section;
+- non-plan-changing actions do not have before/after plans in `Conclusion`;
 - the recommended action uses the contracted vocabulary;
 - the recommendation follows the diagnosed runtime mechanism;
 - time breakdown and the full `actRows` path were considered;
 - root cause names concrete operators and tables when evidence provides them;
-- `Plan before` is complete production runtime evidence, not local EXPLAIN;
-- `Plan after` is complete full-SQL EXPLAIN evidence when validation ran;
+- a reported `Plan before` is complete production runtime evidence, not local EXPLAIN;
+- a reported `Plan after` is complete full-SQL EXPLAIN evidence when validation ran;
 - a matching local environment was not skipped without an exact blocker;
 - concrete SQL passed all three validation booleans, or inferred Index DDL passed every advisory
   check and is explicitly marked as not plan-reproduced;

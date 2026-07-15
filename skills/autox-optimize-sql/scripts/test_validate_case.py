@@ -43,10 +43,14 @@ class ValidateCaseTest(unittest.TestCase):
 {action}
 
 Plan before:
+```text
 IndexLookUp with table-row fetch
+```
 
 Plan after:
+```text
 Covering IndexReader; candidate plan was not reproduced
+```
 
 Why:
 The candidate removes the diagnosed table-row fetch while preserving the required order."""
@@ -68,18 +72,6 @@ The observed plan already uses the useful access path, so no plan-changing actio
             f"""## Conclusion
 
 {conclusion}
-
-## Plans Before & After
-
-Plan before:
-```text
-complete production plan
-```
-
-Plan after:
-```text
-The candidate plan was not reproduced.
-```
 
 ## Analysis
 
@@ -205,23 +197,24 @@ Validation and risks:
             self.validate(workspace),
         )
 
-    def test_plan_action_requires_before_and_after_summaries(self) -> None:
+    def test_plan_action_requires_before_and_after_plans(self) -> None:
         workspace = self.write_case("Index first", "inferred", "passed")
         report = workspace / "report" / "report.md"
         text = report.read_text(encoding="utf-8")
         text = text.replace(
-            "\nPlan after:\nCovering IndexReader; candidate plan was not reproduced\n",
+            "\nPlan after:\n```text\n"
+            "Covering IndexReader; candidate plan was not reproduced\n```\n",
             "\n",
             1,
         )
         report.write_text(text, encoding="utf-8")
         self.assertIn(
-            "plan-changing Conclusion must contain only Action, one-line Plan before, "
-            "one-line Plan after, and Why",
+            "plan-changing Conclusion must contain only Action, complete Plan before, "
+            "complete Plan after, and Why",
             self.validate(workspace),
         )
 
-    def test_plan_section_rejects_verbose_metadata(self) -> None:
+    def test_conclusion_rejects_verbose_plan_metadata(self) -> None:
         workspace = self.write_case("Index first", "inferred", "passed")
         report = workspace / "report" / "report.md"
         text = report.read_text(encoding="utf-8")
@@ -232,7 +225,8 @@ Validation and risks:
         )
         report.write_text(text, encoding="utf-8")
         self.assertIn(
-            "plan section contains verbose metadata field Source:",
+            "plan-changing Conclusion must contain only Action, complete Plan before, "
+            "complete Plan after, and Why",
             self.validate(workspace),
         )
 
@@ -240,7 +234,7 @@ Validation and risks:
         workspace = self.write_case("Index first", "inferred", "passed")
         report = workspace / "report" / "report.md"
         text = report.read_text(encoding="utf-8")
-        conclusion_end = text.index("\n## Plans Before & After")
+        analysis_start = text.index("\n## Analysis")
         legacy = """## Conclusion
 
 Recommended action:
@@ -251,11 +245,19 @@ Review only. Not executed by AutoX.
 ```sql
 CREATE INDEX idx_a ON t (a);
 ```
-""" + text[conclusion_end:]
+
+## Plans Before & After
+
+Plan before:
+complete production plan
+
+Plan after:
+The candidate plan was not reproduced.
+""" + text[analysis_start:]
         report.write_text(legacy, encoding="utf-8")
         self.assertIn(
-            "plan-changing Conclusion must contain only Action, one-line Plan before, "
-            "one-line Plan after, and Why",
+            "plan-changing Conclusion must contain only Action, complete Plan before, "
+            "complete Plan after, and Why",
             self.validate(workspace),
         )
         self.assertEqual(
