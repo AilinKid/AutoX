@@ -84,6 +84,7 @@ ${AUTOX_WORKDIR:-${TMPDIR:-/tmp}/autox-batch/<batch_id>}/
 Never share between active digest cases:
 
 - local TiDB data directories;
+- local TiDB source worktrees;
 - local schema databases;
 - ports;
 - generated SQL files;
@@ -129,7 +130,8 @@ For each digest:
 - run full-SQL local validation when matching version, schema, and stats are available;
 - produce one complete focused report;
 - remove child-created hypothetical state and complete run-local artifact cleanup before marking
-  the case complete; do not stop or reconfigure an externally managed local TiDB environment.
+  the case complete; stop and clean up any local TiDB process, data directory, and source worktree
+  created for that child diagnosis.
 
 Do not share a recommendation between digests merely because SQL text, table names, or plan shapes
 look similar.
@@ -166,8 +168,9 @@ Dispatch rules:
 1. Create one subagent task per digest.
 2. Give each subagent exactly one digest; never place multiple digests in one subagent task.
 3. Keep at most `max_concurrency` subagents active.
-4. Use only isolated validation endpoints or schemas assigned by the externally prepared
-   environment. Do not allocate ports, create data directories, or provision TiDB.
+4. Use only isolated validation endpoints or schemas assigned to the child. If no endpoint is
+   assigned, the child may allocate a per-diagnosis port, source worktree, and data directory for
+   local validation.
 5. Start the next queued digest only after an active subagent releases its assigned validation
    session and run-local workspace resources.
 6. Reject and rerun a subagent result that did not use the complete `$autox-optimize-sql` workflow

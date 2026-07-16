@@ -21,6 +21,9 @@ Read `../autox-optimize-sql/references/case-contract.md`.
 3. Use the matching TiDB source checkout only when exposed plans cannot explain
    a decision. Record exact file paths, symbols, commit or tag, and verified
    behavior; do not infer semantics from unrelated versions.
+   When documentation is needed to confirm target-version syntax or behavior,
+   consult `pingcap/docs` or the TiDB official website and record the exact
+   branch, page, or URL used.
 4. Run no-ANALYZE `EXPLAIN EXPLORE` in the version-matched lab before inventing
    manual hint candidates. Use the supported forms for the target version:
    `EXPLAIN EXPLORE <bare_sql>` or `EXPLAIN EXPLORE '<bare_sql_text>'`. Use

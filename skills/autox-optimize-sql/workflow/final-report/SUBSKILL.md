@@ -334,8 +334,9 @@ Before finalizing:
    the diagnosis workspace and complete the report completion check from the full artifacts.
    `Investigate non-optimizer bottleneck` and `No optimizer action` do not require a retained
    optimizer candidate artifact.
-3. Remove hypothetical state created in the externally prepared local validation session. Do not
-   stop or reconfigure the externally managed TiDB environment.
+3. Remove hypothetical state created in the local validation session. Stop local TiDB and remove
+   source worktrees, data directories, and generated validation files only when AutoX created them
+   for this diagnosis; do not stop or reconfigure a user-supplied shared TiDB endpoint.
 4. Remove raw Clinic/Dashboard responses, download tokens, and generated replay files created in
    the diagnosis workspace unless the user explicitly requested retention.
 5. If cleanup fails, record the exact leftover path and contents in the existing cleanup field.

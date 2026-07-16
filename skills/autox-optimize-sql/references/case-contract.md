@@ -45,8 +45,9 @@ Each subskill consumes the output of the preceding workflow step directly:
   error; system tables may use `not_applicable`. A missing record is a workflow failure.
 - `workflow/diagnosis-classification/SUBSKILL.md` consumes the problem profile and generates any
   concrete ready-for-validation candidates.
-- `workflow/local-validation/SUBSKILL.md` consumes and validates those candidates when an
-  externally prepared matching environment is available; otherwise it records exact blockers.
+- `workflow/local-validation/SUBSKILL.md` prepares or reuses a version-matched local TiDB
+  environment, consumes candidate artifacts, and validates candidates; if preparation or validation
+  cannot run, it records exact blockers.
 - `autox-explore-sql` may run only after baseline reproduction was checked and recorded.
 - `autox-compare-plans` requires at least one generated candidate or compared plan set.
 - `workflow/final-report/SUBSKILL.md` requires production prior plan collection attempted,
@@ -241,9 +242,10 @@ not run. Its candidate artifact must record all of these booleans as `true`:
 - `operational_risks_recorded`.
 
 The artifact must also include an `advisory_evidence` object that maps every check to source paths
-or a target-version documentation/source reference. The gate fails when any check is false,
-missing, or unsupported. A completed validation result of `rejected` cannot fall back to the
-advisory gate.
+or a target-version documentation/source reference. Documentation references may come from
+`pingcap/docs` or the TiDB official website and must include the exact branch, page, or URL used.
+The gate fails when any check is false, missing, or unsupported. A completed validation result of
+`rejected` cannot fall back to the advisory gate.
 
 An inferred `Index first` requires a concrete DDL, `advisory_gate: passed`, and an exact local
 validation blocker. Its DDL may appear as review-only advisory SQL, but the report must state that

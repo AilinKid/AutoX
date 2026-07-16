@@ -119,30 +119,77 @@ Local-only DDL is allowed only inside the isolated local TiDB validation environ
 
 ## Local TiDB Environment
 
-Local validation is optional and may use only an externally prepared isolated TiDB environment.
-AutoX must not install, download, build, or provision TiDB, TiDB source, `json2schema`, or other
-environment dependencies. If a suitable environment is unavailable, record the exact blocker and
-continue without claiming plan verification.
+Local validation may use either a user-supplied isolated TiDB endpoint or an AutoX-prepared local
+standalone TiDB. AutoX may prepare only local validation infrastructure; it must never prepare or
+mutate production infrastructure.
 
-Environment absence changes only validation status and level. Preserve the diagnosis direction
-and the Index candidate's advisory checks. An Index candidate whose advisory gate passed remains
-eligible for an inferred `Index first`; do not replace it with a no-action candidate solely because
-local TiDB was not prepared. A candidate actually rejected by completed validation is not eligible
-for this fallback.
+Preparation inputs:
 
-Optional local inputs:
-
-- a TiDB binary or source checkout matching the target cluster version;
-- a local standalone TiDB process using the default local storage engine, not TiKV;
+- target cluster TiDB version;
 - exported schema JSON and statistics JSON;
-- a schema/statistics replay workspace;
+- a per-diagnosis workspace;
+- optional existing local TiDB source checkout or binary;
 - `json2schema` from `https://github.com/time-and-fate/json2schema`.
 
-The local TiDB version must match the target cluster TiDB version as closely as possible. If it
-does not match, mark validation as advisory or `inferred`.
+The local TiDB version must match the target cluster TiDB version as closely as possible. Resolve
+the exact checkout target from cluster metadata. Prefer an exact release tag or commit. If the
+cluster version cannot be mapped to a checkout target, record the exact blocker and keep validation
+`inferred`.
 
-Never reuse a local TiDB data directory, port, generated schema, stats file, or validation
-workspace across diagnosis IDs.
+Never reuse a local TiDB data directory, source worktree, port, generated schema, stats file, or
+validation workspace across diagnosis IDs.
+
+### Prepare Source and Binary
+
+When no user-supplied isolated TiDB endpoint is already available:
+
+1. Locate an existing `pingcap/tidb` checkout before cloning. Check user-provided paths first, then
+   common local workspaces such as `$TIDB_SRC`, `$AUTOX_TIDB_SRC`, the AutoX work area, and parent
+   source directories. Verify it is a Git repository whose `remote.origin.url` points to
+   `pingcap/tidb`.
+2. If no checkout exists, clone `https://github.com/pingcap/tidb` into the local AutoX work area,
+   for example:
+
+   ```bash
+   git clone https://github.com/pingcap/tidb "$AUTOX_WORKDIR/repos/tidb"
+   ```
+
+3. Create a per-diagnosis source worktree from the canonical checkout. Do not build or modify the
+   shared checkout directly:
+
+   ```bash
+   git -C "$TIDB_REPO" fetch --tags origin
+   git -C "$TIDB_REPO" worktree add "$WORKSPACE/local/tidb-worktree" "$CLUSTER_VERSION"
+   ```
+
+4. In the worktree, verify the resolved version and record the exact commit:
+
+   ```bash
+   git -C "$WORKSPACE/local/tidb-worktree" checkout "$CLUSTER_VERSION"
+   git -C "$WORKSPACE/local/tidb-worktree" rev-parse HEAD
+   ```
+
+5. Build TiDB in the worktree:
+
+   ```bash
+   make
+   ```
+
+   If the build fails, record the command, exit status, and relevant error output. Do not silently
+   substitute a different TiDB version.
+
+6. Start one isolated standalone TiDB process from the built worktree using the default local
+   storage engine, a per-diagnosis data directory, and per-diagnosis ports. Record the command,
+   process ID, data path, status address, SQL address, log path, commit, and cleanup command.
+
+If a user-supplied endpoint is used instead, record that it was user-supplied and do not stop,
+reconfigure, or clean it up.
+
+Environment preparation failure changes only validation status and level. Preserve the diagnosis
+direction and the Index candidate's advisory checks. An Index candidate whose advisory gate passed
+remains eligible for an inferred `Index first`; do not replace it with a no-action candidate solely
+because local TiDB could not be prepared. A candidate actually rejected by completed validation is
+not eligible for this fallback.
 
 ## Full SQL Requirement
 
@@ -166,13 +213,11 @@ and present it as the final candidate plan.
 
 ## Prepare Schema and Stats
 
-For candidates requiring local plan-shape validation, and only when all required tools and the
-isolated TiDB endpoint were prepared externally:
+For candidates requiring local plan-shape validation:
 
-1. Connect to the externally prepared standalone local TiDB endpoint. Do not start or provision
-   an environment as part of AutoX.
-2. Convert each involved `tidb_schema_by_table` JSON file into `CREATE TABLE` SQL using the
-   externally prepared `json2schema` executable:
+1. Connect to the user-supplied or AutoX-prepared standalone local TiDB endpoint.
+2. Convert each involved `tidb_schema_by_table` JSON file into `CREATE TABLE` SQL using
+   `json2schema`:
 
    ```bash
    json2schema tidb_schema_by_table_1688114034.json
@@ -195,8 +240,8 @@ isolated TiDB endpoint were prepared externally:
    local infile restriction and retry with `--local-infile=1`. Do not misreport it as TiDB
    rejecting `LOAD STATS`.
 
-5. Save generated DDL, loaded stats filenames, local TiDB version, and the non-secret endpoint
-   identifier as validation evidence.
+5. Save generated DDL, loaded stats filenames, local TiDB version, source commit, build command,
+   process metadata, and the non-secret endpoint identifier as validation evidence.
 
 ## Baseline Plan
 

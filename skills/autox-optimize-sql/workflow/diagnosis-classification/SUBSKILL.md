@@ -513,8 +513,10 @@ Do not generate a Binding candidate when:
 - forcing the shape could materially harm other common parameter values.
 
 Verify every target-version hint against TiDB source or documentation before writing candidate
-SQL. This includes `USE_INDEX`, `IGNORE_INDEX`, `HASH_JOIN`, `INL_JOIN`, join-order hints, storage
-hints, and any other hint used. Never invent hint syntax or placement from memory.
+SQL. Documentation may come from `pingcap/docs` or the TiDB official website; prefer the
+target-version branch or page and record the exact reference. This includes `USE_INDEX`,
+`IGNORE_INDEX`, `HASH_JOIN`, `INL_JOIN`, join-order hints, storage hints, and any other hint used.
+Never invent hint syntax or placement from memory.
 
 Include:
 
@@ -573,7 +575,8 @@ Include:
 - workload value, write/storage cost, regression risk, and any potentially redundant old index;
 - `advisory_checks` with each check from `case-contract.md` set explicitly;
 - `advisory_evidence` mapping every check to a source path or target-version
-  documentation/source reference;
+  documentation/source reference, including exact `pingcap/docs` branch/page or TiDB official URL
+  when documentation is used;
 - validation steps:
   - load schema and stats;
   - capture baseline `EXPLAIN FORMAT='verbose'`;
@@ -591,7 +594,7 @@ index from column order aesthetics or estimated cost alone.
 The Index advisory gate passes only when every required check is true. A partial optimization may
 pass only when production evidence shows it addresses a material contributor; record the dominant
 work left unchanged. Do not change `recommended_direction: Index first` to `No optimizer action`
-solely because an externally prepared local TiDB environment is unavailable.
+solely because a local TiDB environment could not be prepared or supplied.
 
 ### TiFlash / MPP Candidate
 

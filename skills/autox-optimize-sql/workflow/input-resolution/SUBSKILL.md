@@ -23,7 +23,7 @@ Optional:
 - inspection start and end time;
 - business timezone;
 - prepared local TiDB connection;
-- matching TiDB source checkout or binary.
+- existing TiDB source checkout or binary.
 
 When the user provides a `cluster_id`, treat it as sufficient authorization to run the
 read-only diagnostic workflow.
@@ -96,7 +96,7 @@ The TiDB version determines:
 - binding syntax;
 - statistics behavior;
 - plan format;
-- source code version used for investigation;
+- source checkout version used for investigation and local validation;
 - local validation compatibility.
 
 If the cluster is not found, stop.

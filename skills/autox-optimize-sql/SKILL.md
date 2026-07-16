@@ -52,6 +52,11 @@ statistics, metrics, and diagnostic files.
 Do not copy Clinic authentication, API implementation, or endpoint details into AutoX.
 Use the scripts and client supplied by `clinic-api` or the bundled AutoX collection scripts.
 
+When TiDB behavior, SQL syntax, optimizer hints, statistics handling, TiFlash/MPP behavior, or
+local validation commands require documentation, consult `pingcap/docs` or the TiDB official
+website. Prefer documentation matching the target cluster version; record the exact branch, page, or
+URL used and distinguish documentation evidence from source-code evidence.
+
 ## Cloud Evidence Gate
 
 The Clinic Data Proxy schema describes observability tables such as `slow_query_logs` and
@@ -79,7 +84,8 @@ For every diagnosis:
 5. Build a problem profile.
 6. Classify the root cause.
 7. Generate ready-for-validation candidates when the diagnosis supports an optimizer action.
-8. Validate candidates locally when matching TiDB version, schema, and stats are available.
+8. Prepare or reuse an isolated version-matched local TiDB, then validate candidates locally when
+   schema and stats are available.
 9. Produce the final report.
 10. Clean up raw temporary artifacts, or report the retained path if cleanup fails.
 
@@ -149,7 +155,7 @@ Local validation must use the full production SQL shape. Do not simplify joins, 
 subqueries, UNION arms, or parameter structure and then claim the result validates the original SQL.
 
 If validation cannot run, record the exact blocker. Do not ask the customer for more evidence
-when Cloud-side evidence was available to AutoX. Missing externally prepared local TiDB keeps the
+when Cloud-side evidence was available to AutoX. A local TiDB preparation failure keeps the
 validation level at `inferred`; it does not by itself demote an Index candidate. Use `No optimizer
 action` or `Investigate non-optimizer bottleneck` only when the collected evidence and applicable
 advisory gate do not justify an optimizer action.

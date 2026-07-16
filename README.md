@@ -7,8 +7,9 @@ The first version has one goal:
 > Input a TiDB Cloud `cluster_id`, inspect its slow queries, and output
 > actionable optimization suggestions.
 
-AutoX is read-only. It does not create bindings, change indexes, modify a
-cluster, prepare a local TiDB environment, or verify production outcomes.
+AutoX is read-only for the target cluster. It does not create production
+bindings, change production indexes, modify a cluster, or verify production
+outcomes.
 
 ## Workflow
 
@@ -17,7 +18,7 @@ cluster_id
   -> resolve cluster, SQL target, and time range
   -> collect Slow Query, TopSQL, runtime plans, schema, and statistics
   -> classify the bottleneck and generate concrete candidates
-  -> optionally validate plans on an externally prepared, version-matched TiDB
+  -> optionally prepare a local version-matched TiDB and validate plans
   -> output one evidence-backed, review-only recommendation
 ```
 
@@ -29,9 +30,15 @@ schema does not satisfy this evidence requirement.
 Top-N requests use the batch workflow, but every selected digest still runs the
 complete focused workflow and produces its own report.
 
-The environment is prepared outside AutoX. In local development, the user may
-provide a matching TiDB instance and TiDB source checkout. In a future cloud
-runtime, the platform should provide those dependencies.
+When local validation is needed, AutoX first looks for an existing local
+`pingcap/tidb` source checkout. If none is available, it may clone one under the
+local AutoX work area, create a per-diagnosis `git worktree`, check out the
+target cluster version, build TiDB with `make`, and start an isolated standalone
+TiDB for schema/stat replay and static `EXPLAIN`.
+
+When optimizer behavior, SQL syntax, hints, statistics, TiFlash, or operational semantics need
+documentation, AutoX may consult `pingcap/docs` or the TiDB official website. Treat those sources
+as version-sensitive references and record the exact page, branch, or URL used.
 
 ## Skills and workflows
 
@@ -42,8 +49,8 @@ runtime, the platform should provide those dependencies.
   and statistics.
 - `diagnosis-classification`: identify the dominant mechanism and generate
   ready-for-validation candidates.
-- `local-validation`: validate full-SQL plan shape only when an isolated,
-  externally prepared matching environment is available.
+- `local-validation`: prepare or reuse an isolated, version-matched local TiDB
+  and validate full-SQL plan shape.
 - `final-report`: produce the customer-facing recommendation and evidence.
 - `batch-diagnosis`: orchestrate top-N analysis without skipping per-digest
   workflow steps.
@@ -63,7 +70,7 @@ Optional:
 - inspection time range;
 - a specific SQL digest;
 - an already prepared local TiDB connection;
-- a matching TiDB source checkout.
+- an existing matching TiDB source checkout.
 
 ## Output
 
