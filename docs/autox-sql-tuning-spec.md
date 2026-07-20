@@ -449,8 +449,12 @@ Every recommendation must include a validation level.
 | Level | Meaning |
 |---|---|
 | `inferred` | Recommendation follows from evidence and reasoning, but the candidate plan was not reproduced. |
-| `plan_verified` | Static `EXPLAIN` or `EXPLAIN EXPLORE` shows the intended plan shape. |
-| `prod_verified` | Production read-only observation or approved production validation confirms improvement. |
+| `plan_verified` | A target-version local standalone TiDB reproduces the intended plan from the full SQL after loading schema and stats. |
+| `prod_verified` | Production runtime evidence confirms the selected recommendation or non-optimizer diagnosis. |
+
+These labels identify different evidence sources. `prod_verified` does not imply
+`plan_verified`. A historical production plan or production-safe static `EXPLAIN`
+cannot substitute for target-version local plan reproduction.
 
 Local static `EXPLAIN` is not runtime proof. Reports must not claim latency
 improvement unless runtime evidence exists.

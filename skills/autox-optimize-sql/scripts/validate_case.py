@@ -19,6 +19,7 @@ ALLOWED_ACTIONS = {
     "No optimizer action",
 }
 ALLOWED_VALIDATION_LEVELS = {"inferred", "plan_verified", "prod_verified"}
+ALLOWED_VALIDATION_STATUSES = {"not_run", "passed", "failed"}
 PLAN_CHANGING_ACTIONS = {"Binding first", "Index first", "TiFlash / MPP first"}
 PLAN_REPORT_HEADINGS = ["Conclusion", "Plans Before & After", "Analysis"]
 NON_PLAN_REPORT_HEADINGS = ["Conclusion", "Analysis"]
@@ -129,6 +130,97 @@ def validate_analysis(report_text: str, errors: list[str]) -> None:
         )
 
 
+def validate_validation_evidence(action: str, result: dict[str, Any], errors: list[str],
+                                 allow_legacy: bool) -> None:
+    if allow_legacy:
+        return
+
+    level = result.get("validation_level")
+    plan_status = result.get("plan_validation_status")
+    production_status = result.get("production_validation_status")
+    if plan_status not in ALLOWED_VALIDATION_STATUSES:
+        errors.append("invalid or missing plan_validation_status")
+    if production_status not in ALLOWED_VALIDATION_STATUSES:
+        errors.append("invalid or missing production_validation_status")
+
+    expected_level = (
+        "prod_verified"
+        if production_status == "passed"
+        else "plan_verified"
+        if plan_status == "passed"
+        else "inferred"
+    )
+    if level in ALLOWED_VALIDATION_LEVELS and level != expected_level:
+        errors.append("validation_level does not match independent validation statuses")
+
+    if plan_status == "passed":
+        plan = result.get("plan_validation")
+        if not isinstance(plan, dict):
+            errors.append("plan_verified result missing plan_validation evidence")
+        else:
+            require_keys(
+                plan,
+                (
+                    "validation_source", "target_tidb_version", "local_tidb_version",
+                    "source_commit", "reproduction_kind", "version_match", "schema_loaded", "stats_loaded",
+                    "full_sql_validated", "baseline_plan_captured",
+                    "candidate_plan_captured", "baseline_matches_expected_shape", "syntax_accepted",
+                    "optimizer_selected_expected_path", "plan_shape_matches_diagnosis",
+                ),
+                "plan_validation",
+                errors,
+            )
+            if plan.get("validation_source") != "local_tidb":
+                errors.append("plan_validation source must be local_tidb")
+            for key in (
+                "version_match", "schema_loaded", "stats_loaded", "full_sql_validated",
+                "baseline_plan_captured", "syntax_accepted",
+                "optimizer_selected_expected_path", "plan_shape_matches_diagnosis",
+            ):
+                if plan.get(key) is not True:
+                    errors.append(f"plan_validation {key} must be true")
+            for key in ("target_tidb_version", "local_tidb_version", "source_commit"):
+                if not isinstance(plan.get(key), str) or not plan.get(key):
+                    errors.append(f"plan_validation {key} must be non-empty")
+            if action in PLAN_CHANGING_ACTIONS:
+                if plan.get("reproduction_kind") != "candidate":
+                    errors.append("plan-changing plan_validation reproduction_kind must be candidate")
+                if plan.get("candidate_plan_captured") is not True:
+                    errors.append("plan_validation candidate_plan_captured must be true")
+            else:
+                if plan.get("reproduction_kind") != "baseline_recovered":
+                    errors.append(
+                        "non-plan-changing plan_validation reproduction_kind must be baseline_recovered"
+                    )
+                if plan.get("baseline_matches_expected_shape") is not True:
+                    errors.append("plan_validation baseline_matches_expected_shape must be true")
+
+    if production_status == "passed":
+        production = result.get("production_validation")
+        if not isinstance(production, dict):
+            errors.append("prod_verified result missing production_validation evidence")
+        else:
+            require_keys(
+                production,
+                (
+                    "validation_source", "runtime_evidence_observed",
+                    "conclusion_confirmed", "evidence_reference",
+                ),
+                "production_validation",
+                errors,
+            )
+            if production.get("validation_source") != "production_runtime":
+                errors.append("production_validation source must be production_runtime")
+            if production.get("runtime_evidence_observed") is not True:
+                errors.append("production_validation runtime_evidence_observed must be true")
+            if production.get("conclusion_confirmed") is not True:
+                errors.append("production_validation conclusion_confirmed must be true")
+            if not isinstance(production.get("evidence_reference"), str) or not production.get(
+                "evidence_reference"
+            ):
+                errors.append("production_validation evidence_reference must be non-empty")
+
+
 def validate_report(workspace: Path, result: dict[str, Any], errors: list[str],
                     allow_legacy_report_name: bool = False,
                     allow_legacy_report_format: bool = False) -> str:
@@ -167,13 +259,17 @@ def validate_report(workspace: Path, result: dict[str, Any], errors: list[str],
 def validate_completed(workspace: Path, result: dict[str, Any], report_text: str,
                        expected_digest: str | None, expected_diagnosis_id: str | None,
                        errors: list[str], warnings: list[str],
-                       allow_legacy_report_format: bool = False) -> None:
+                       allow_legacy_report_format: bool = False,
+                       allow_legacy_validation_evidence: bool = False) -> None:
     action = result.get("recommended_action")
     level = result.get("validation_level")
     if action not in ALLOWED_ACTIONS:
         errors.append("invalid or missing recommended_action")
     if level not in ALLOWED_VALIDATION_LEVELS:
         errors.append("invalid or missing validation_level")
+    validate_validation_evidence(
+        str(action or ""), result, errors, allow_legacy_validation_evidence
+    )
 
     manifest_path = workspace / "manifest.json"
     manifest = load_json(manifest_path, errors) if manifest_path.is_file() else {}
@@ -203,6 +299,10 @@ def validate_completed(workspace: Path, result: dict[str, Any], report_text: str
     if (recommendation.get("validation_level") is not None
             and recommendation.get("validation_level") != level):
         errors.append("manifest validation_level does not match result.json")
+    for status_key in ("plan_validation_status", "production_validation_status"):
+        if (recommendation.get(status_key) is not None
+                and recommendation.get(status_key) != result.get(status_key)):
+            errors.append(f"manifest {status_key} does not match result.json")
     if (recommendation.get("advisory_gate") is not None
             and recommendation.get("advisory_gate") != result.get("advisory_gate")):
         errors.append("manifest advisory_gate does not match result.json")
@@ -243,6 +343,8 @@ def validate_completed(workspace: Path, result: dict[str, Any], report_text: str
         validate_plans(str(action or ""), report_text, errors)
         validate_analysis(report_text, errors)
     markers = ["Validation level:"]
+    if not allow_legacy_validation_evidence:
+        markers.extend(("Plan validation status:", "Production validation status:"))
     if action in PLAN_CHANGING_ACTIONS or allow_legacy_report_format:
         markers.extend(("Plan before:", "Plan after:"))
     for marker in markers:
@@ -329,6 +431,9 @@ def validate(args: argparse.Namespace) -> tuple[dict[str, Any], list[str], list[
             allow_legacy_report_format=getattr(
                 args, "allow_legacy_report_format", False
             ),
+            allow_legacy_validation_evidence=getattr(
+                args, "allow_legacy_validation_evidence", False
+            ),
         )
     return result, errors, warnings
 
@@ -348,6 +453,11 @@ def parse_args() -> argparse.Namespace:
         "--allow-legacy-report-format",
         action="store_true",
         help="audit a case created before the current action-specific report contract",
+    )
+    parser.add_argument(
+        "--allow-legacy-validation-evidence",
+        action="store_true",
+        help="audit a case created before independent plan/production evidence fields",
     )
     parser.add_argument("--json", action="store_true", dest="json_output")
     return parser.parse_args()

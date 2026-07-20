@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import tempfile
 import unittest
 from argparse import Namespace
@@ -32,7 +33,42 @@ class ValidateCaseTest(unittest.TestCase):
             "recommended_action": action,
             "validation_level": level,
             "report_path": "report/report.md",
+            "plan_validation_status": "passed" if level == "plan_verified" else "not_run",
+            "production_validation_status": (
+                "passed" if level == "prod_verified" else "not_run"
+            ),
         }
+        if level == "plan_verified":
+            result["plan_validation"] = {
+                "validation_source": "local_tidb",
+                "target_tidb_version": "v8.5.4",
+                "local_tidb_version": "v8.5.4",
+                "source_commit": "0123456789abcdef",
+                "reproduction_kind": (
+                    "candidate"
+                    if action in VALIDATE_CASE.PLAN_CHANGING_ACTIONS
+                    else "baseline_recovered"
+                ),
+                "version_match": True,
+                "schema_loaded": True,
+                "stats_loaded": True,
+                "full_sql_validated": True,
+                "baseline_plan_captured": True,
+                "candidate_plan_captured": True,
+                "baseline_matches_expected_shape": (
+                    action not in VALIDATE_CASE.PLAN_CHANGING_ACTIONS
+                ),
+                "syntax_accepted": True,
+                "optimizer_selected_expected_path": True,
+                "plan_shape_matches_diagnosis": True,
+            }
+        if level == "prod_verified":
+            result["production_validation"] = {
+                "validation_source": "production_runtime",
+                "runtime_evidence_observed": True,
+                "conclusion_confirmed": True,
+                "evidence_reference": "report.md#observed-evidence",
+            }
         if advisory_gate is not None:
             result["advisory_gate"] = advisory_gate
         (workspace / "result.json").write_text(
@@ -47,7 +83,12 @@ Review only. Not executed by AutoX.
 ```sql
 CREATE INDEX idx_a ON t (a);
 ```"""
-            plans = """\n\n## Plans Before & After
+            candidate_plan = (
+                "Covering IndexReader; candidate plan was not reproduced"
+                if level == "inferred"
+                else "Covering IndexReader using idx_a"
+            )
+            plans = f"""\n\n## Plans Before & After
 
 Plan before:
 ```text
@@ -56,7 +97,7 @@ IndexLookUp with table-row fetch
 
 Plan after:
 ```text
-Covering IndexReader; candidate plan was not reproduced
+{candidate_plan}
 ```"""
         else:
             conclusion = f"""Action:
@@ -81,6 +122,8 @@ The covering candidate targets that fetch.
 Validation and risks:
 - Validation status: {validation_status}
 - Validation level: {level}
+- Plan validation status: {result['plan_validation_status']}
+- Production validation status: {result['production_validation_status']}
 - Advisory gate: {advisory_gate or 'not applicable'}
 - Selected candidate ID: idx_a
 - Missing evidence or blocker: candidate plan was not reproduced
@@ -97,12 +140,14 @@ Validation and risks:
         self.tempdir.cleanup()
 
     def validate(self, workspace: Path, allow_legacy_report_name: bool = False,
-                 allow_legacy_report_format: bool = False) -> list[str]:
+                 allow_legacy_report_format: bool = False,
+                 allow_legacy_validation_evidence: bool = False) -> list[str]:
         args = Namespace(
             workspace=str(workspace), rank=None, digest=None,
             diagnosis_id=None, json_output=False,
             allow_legacy_report_name=allow_legacy_report_name,
             allow_legacy_report_format=allow_legacy_report_format,
+            allow_legacy_validation_evidence=allow_legacy_validation_evidence,
         )
         _, errors, _ = VALIDATE_CASE.validate(args)
         return errors
@@ -141,6 +186,83 @@ Validation and risks:
         self.assertIn(
             "optimizer action is not plan_verified or prod_verified",
             self.validate(workspace),
+        )
+
+    def test_plan_verified_requires_local_validation_evidence(self) -> None:
+        workspace = self.write_case("Binding first", "plan_verified", "passed")
+        result_path = workspace / "result.json"
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+        result.pop("plan_validation")
+        result_path.write_text(json.dumps(result), encoding="utf-8")
+        self.assertIn(
+            "plan_verified result missing plan_validation evidence",
+            self.validate(workspace),
+        )
+
+    def test_plan_verified_rejects_production_static_source(self) -> None:
+        workspace = self.write_case("Binding first", "plan_verified", "passed")
+        result_path = workspace / "result.json"
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+        result["plan_validation"]["validation_source"] = "production_static_explain"
+        result_path.write_text(json.dumps(result), encoding="utf-8")
+        self.assertIn(
+            "plan_validation source must be local_tidb",
+            self.validate(workspace),
+        )
+
+    def test_plan_verified_accepts_natural_baseline_recovery(self) -> None:
+        workspace = self.write_case(
+            "No optimizer action", "plan_verified", None,
+            validation_status="plan already recovered",
+        )
+        self.assertEqual([], self.validate(workspace))
+
+    def test_prod_verified_does_not_imply_plan_verified(self) -> None:
+        workspace = self.write_case(
+            "Investigate non-optimizer bottleneck", "prod_verified", None,
+            validation_status="production verified",
+        )
+        result = json.loads((workspace / "result.json").read_text(encoding="utf-8"))
+        self.assertEqual("not_run", result["plan_validation_status"])
+        self.assertEqual([], self.validate(workspace))
+
+    def test_prod_verified_requires_runtime_evidence(self) -> None:
+        workspace = self.write_case(
+            "Investigate non-optimizer bottleneck", "prod_verified", None,
+            validation_status="production verified",
+        )
+        result_path = workspace / "result.json"
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+        result["production_validation"]["validation_source"] = "historical_plan"
+        result_path.write_text(json.dumps(result), encoding="utf-8")
+        self.assertIn(
+            "production_validation source must be production_runtime",
+            self.validate(workspace),
+        )
+
+    def test_legacy_validation_evidence_requires_explicit_flag(self) -> None:
+        workspace = self.write_case("No optimizer action", "inferred", None)
+        result_path = workspace / "result.json"
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+        result.pop("plan_validation_status")
+        result.pop("production_validation_status")
+        result_path.write_text(json.dumps(result), encoding="utf-8")
+        report = workspace / "report" / "report.md"
+        text = report.read_text(encoding="utf-8")
+        text = re.sub(
+            r"^- (?:Plan|Production) validation status:.*\n",
+            "",
+            text,
+            flags=re.MULTILINE,
+        )
+        report.write_text(text, encoding="utf-8")
+        self.assertIn(
+            "invalid or missing plan_validation_status",
+            self.validate(workspace),
+        )
+        self.assertEqual(
+            [],
+            self.validate(workspace, allow_legacy_validation_evidence=True),
         )
 
     def test_noncanonical_report_name_is_invalid(self) -> None:

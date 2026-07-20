@@ -228,6 +228,9 @@ Before cleanup, the child self-audit must confirm all applicable checks:
 - local validation ran when matching TiDB version, schema, and statistics were available;
 - validation used the full original SQL without removing joins, subqueries, predicates, or UNION
   arms;
+- `plan_verified` retains target/local version, source commit, schema/stats/full-SQL flags,
+  complete baseline/candidate plan flags, and all three successful plan-validation booleans;
+- `prod_verified` retains production runtime evidence and does not imply local plan validation;
 - `Plan before` contains the complete production runtime plan, preferably slow-log
   `decoded_plan`;
 - `Plan before` preserves `actRows`, execution info, process/total keys, cop details, memory, and
@@ -249,7 +252,8 @@ validation level, cleanup state, report structure, and the optional compact mani
 New cases must pass without compatibility flags; `--allow-legacy-report-name` is only for auditing
 reports created before the canonical `report/report.md` contract, and
 `--allow-legacy-report-format` is only for auditing reports created before the current
-action-specific contract.
+action-specific contract. `--allow-legacy-validation-evidence` is only for auditing cases created
+before independent plan and production validation evidence was retained.
 It must not require a child manifest or other persistent case state, and it must not require
 `plans/production_before`, `decision`, evidence files, or candidate artifacts when the compact
 manifest says raw artifacts were cleaned.
@@ -336,6 +340,8 @@ evidence and reports remain in child workspaces.
       "status": "queued",
       "recommended_action": "",
       "validation_level": "",
+      "plan_validation_status": "not_run | passed | failed",
+      "production_validation_status": "not_run | passed | failed",
       "candidate_signal": {
         "type": "",
         "candidate_id": "",

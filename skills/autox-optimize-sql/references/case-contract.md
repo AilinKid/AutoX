@@ -194,9 +194,14 @@ Use these validation levels consistently:
 
 - `inferred`: no candidate plan was reproduced; recommendation follows from evidence and
   optimizer reasoning.
-- `plan_verified`: local or production-safe static `EXPLAIN` shows the intended plan shape.
-- `prod_verified`: production read-only observation or approved production validation confirms
-  the intended improvement.
+- `plan_verified`: a target-version local standalone TiDB reproduced the intended plan shape from
+  the full SQL after loading the required schema and statistics.
+- `prod_verified`: production runtime evidence confirms the selected recommendation or
+  non-optimizer diagnosis.
+
+These are evidence-source labels, not an inheritance hierarchy. `prod_verified` does not imply
+`plan_verified`, and a historical production plan or production-safe static `EXPLAIN` does not
+count as local plan verification.
 
 Validation status examples:
 
@@ -211,8 +216,13 @@ Validation status examples:
 Rules:
 
 - Local static `EXPLAIN` can prove plan shape only. It does not prove runtime improvement.
-- Do not mark a candidate `prod_verified` without production runtime or approved production
-  validation evidence.
+- Do not mark a result `plan_verified` without a target-version local TiDB, full SQL, loaded schema
+  and stats, a complete baseline `EXPLAIN FORMAT='verbose'`, and all three plan-validation booleans
+  set to `true`. Plan-changing actions also require a complete candidate plan. A naturally
+  recovered baseline instead records `reproduction_kind: baseline_recovered`.
+- Do not mark a result `prod_verified` without production runtime or approved production
+  validation evidence that directly confirms the recommendation or diagnosis. Historical plan
+  existence alone is supporting evidence, not production verification.
 - If matching TiDB version, schema, and stats are available, local validation is mandatory
   before final report.
 - If validation cannot run, record the exact blocker.
@@ -229,6 +239,54 @@ Every optimizer candidate plan-validation result must answer:
 
 All three values must be `true` before Binding or TiFlash/MPP SQL may appear in the final
 `Review-only SQL` field or any optimizer recommendation may be marked `plan_verified`.
+
+Every retained `result.json` must record the two validation dimensions separately:
+
+```json
+{
+  "plan_validation_status": "not_run | passed | failed",
+  "production_validation_status": "not_run | passed | failed"
+}
+```
+
+For `validation_level: plan_verified`, retain this compact shape in `result.json`:
+
+```json
+{
+  "plan_validation": {
+    "validation_source": "local_tidb",
+    "target_tidb_version": "",
+    "local_tidb_version": "",
+    "source_commit": "",
+    "reproduction_kind": "candidate",
+    "version_match": true,
+    "schema_loaded": true,
+    "stats_loaded": true,
+    "full_sql_validated": true,
+    "baseline_plan_captured": true,
+    "candidate_plan_captured": true,
+    "baseline_matches_expected_shape": false,
+    "syntax_accepted": true,
+    "optimizer_selected_expected_path": true,
+    "plan_shape_matches_diagnosis": true
+  }
+}
+```
+
+For `validation_level: prod_verified`, retain:
+
+```json
+{
+  "production_validation": {
+    "validation_source": "production_runtime",
+    "runtime_evidence_observed": true,
+    "conclusion_confirmed": true,
+    "evidence_reference": ""
+  }
+}
+```
+
+These fields remain after raw validation artifacts are cleaned.
 
 An Index candidate may instead pass the evidence-backed advisory gate when local validation did
 not run. Its candidate artifact must record all of these booleans as `true`:
@@ -329,6 +387,8 @@ retained manifest:
     "selected_candidate_id": "",
     "validation_status": "",
     "validation_level": "",
+    "plan_validation_status": "not_run | passed | failed",
+    "production_validation_status": "not_run | passed | failed",
     "advisory_gate": "not_applicable | passed | failed",
     "report_path": ""
   },

@@ -179,3 +179,7 @@ After`, and put `Why`, evidence, inference, validation, and risks in `Analysis`.
 was run.
 
 Do not claim runtime improvement from local static `EXPLAIN` alone.
+
+Use `plan_verified` only when a target-version local standalone TiDB reproduces the intended plan
+from the full SQL with schema and stats loaded. `prod_verified` records independent production
+runtime evidence and does not imply that local plan validation ran.

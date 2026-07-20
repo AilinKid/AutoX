@@ -166,21 +166,39 @@ When no user-supplied isolated TiDB endpoint is already available:
 
    ```bash
    git -C "$WORKSPACE/local/tidb-worktree" checkout "$CLUSTER_VERSION"
+   git -C "$WORKSPACE/local/tidb-worktree" describe --tags --exact-match
    git -C "$WORKSPACE/local/tidb-worktree" rev-parse HEAD
    ```
 
-5. Build TiDB in the worktree:
+5. Build TiDB server in the worktree:
 
    ```bash
-   make
+   make server
    ```
 
    If the build fails, record the command, exit status, and relevant error output. Do not silently
    substitute a different TiDB version.
 
-6. Start one isolated standalone TiDB process from the built worktree using the default local
-   storage engine, a per-diagnosis data directory, and per-diagnosis ports. Record the command,
-   process ID, data path, status address, SQL address, log path, commit, and cleanup command.
+6. Check the target-version binary's `--help`, allocate unused per-diagnosis SQL and status ports,
+   and start one isolated standalone TiDB with UniStore. A representative command is:
+
+   ```bash
+   nohup "$WORKTREE/bin/tidb-server" \
+     --store=unistore \
+     --path="$WORKSPACE/local/tidb-data" \
+     --host=127.0.0.1 \
+     -P "$SQL_PORT" \
+     --status-host=127.0.0.1 \
+     --status="$STATUS_PORT" \
+     --log-file="$WORKSPACE/local/tidb.log" \
+     >"$WORKSPACE/local/tidb.stdout.log" 2>&1 &
+   ```
+
+   Verify these flags against the checked-out target version instead of assuming current `main`
+   syntax. Record the command, process ID, data path, status address, SQL address, log path,
+   commit, and cleanup command.
+7. Wait for both the SQL and status endpoints, then record `SELECT VERSION()` output. A process
+   that starts but never becomes ready is a preparation failure, not plan verification.
 
 If a user-supplied endpoint is used instead, record that it was user-supplied and do not stop,
 reconfigure, or clean it up.
@@ -400,9 +418,14 @@ required`.
 Use validation levels from `case-contract.md`:
 
 - `inferred`: no candidate plan was reproduced.
-- `plan_verified`: local or production-safe static `EXPLAIN` shows the intended plan shape.
-- `prod_verified`: production read-only observation or approved production validation confirms
-  the intended improvement.
+- `plan_verified`: the target-version local standalone TiDB reproduced the intended plan from the
+  full SQL with schema and stats loaded.
+- `prod_verified`: production runtime evidence confirms the selected recommendation or diagnosis;
+  it does not imply that local plan validation ran.
+
+Production historical plans and production-safe static `EXPLAIN` are supporting evidence only.
+They cannot set `plan_verified`. Historical plan existence without confirming runtime evidence
+cannot set `prod_verified` either.
 
 Use validation status examples:
 
@@ -445,6 +468,13 @@ Record the three validation answers explicitly:
 If any answer is `false`, record the exact reason and mark the candidate `rejected` or `inferred`
 depending on whether validation was complete.
 
+Set `plan_validation_status: passed` only when the local TiDB version matches the resolved target,
+the full SQL was used, schema and stats were loaded, the complete baseline was captured, and all
+three answers are `true`. A plan-changing action also requires the complete candidate plan and
+`reproduction_kind: candidate`; a naturally recovered baseline uses
+`reproduction_kind: baseline_recovered`. Track production validation independently with
+`production_validation_status`; never infer one status from the other.
+
 Use `$autox-compare-plans` when multiple candidates or plan variants need normalized comparison,
 ranking, or rejection reasons.
 
@@ -452,12 +482,17 @@ ranking, or rejection reasons.
 
 Do not stop or reconfigure an externally managed TiDB environment.
 
+For an AutoX-prepared environment, stop the recorded process, verify both ports are closed, remove
+the per-diagnosis data directory, and remove the worktree with `git worktree remove`. Never remove
+or reset the shared canonical checkout.
+
 Best-effort cleanup:
 
 - temporary schema/stat replay files;
 - hypothetical index state;
 - hypothetical TiFlash state;
 - temporary validation SQL files.
+- AutoX-prepared process, data directory, and source worktree.
 
 If cleanup fails, record the exact leftover path and what remains.
 
@@ -468,10 +503,19 @@ Return this validation result directly. Optionally write or update run-local `ma
 ```json
 {
   "validation": {
+    "target_tidb_version": "",
     "local_tidb_version": "",
     "version_match": false,
     "schema_loaded": false,
     "stats_loaded": false,
+    "full_sql_validated": false,
+    "source_commit": "",
+    "reproduction_kind": "",
+    "plan_validation_status": "not_run",
+    "production_validation_status": "not_run",
+    "baseline_plan_captured": false,
+    "candidate_plan_captured": false,
+    "baseline_matches_expected_shape": false,
     "results": [
       {
         "candidate_id": "",

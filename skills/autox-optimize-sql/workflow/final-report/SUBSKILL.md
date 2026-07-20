@@ -142,7 +142,7 @@ Never use as `Plan before`:
 If a rendered tree risks losing structure or long execution details, embed the raw production
 `decoded_plan`. If no production runtime plan exists, keep the fenced block and state the exact
 missing evidence inside it. A production-safe static `EXPLAIN` may be supporting evidence but must
-not replace an available runtime plan.
+not replace an available runtime plan and must not be labeled `plan_verified`.
 
 ## Plan After
 
@@ -259,6 +259,8 @@ Inference:
 Validation and risks:
 - Validation status: <production verified | locally verified | rejected | inferred | not run>
 - Validation level: <inferred | plan_verified | prod_verified>
+- Plan validation status: <not_run | passed | failed>
+- Production validation status: <not_run | passed | failed>
 - Advisory gate: <passed | failed | not applicable>
 - Selected candidate ID: <candidate id>
 - Missing evidence or blocker: <exact blocker or none>
