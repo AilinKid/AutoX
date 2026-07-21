@@ -418,21 +418,21 @@ required`.
 Use validation levels from `case-contract.md`:
 
 - `inferred`: no candidate plan was reproduced.
+- `observed`: production runtime evidence directly supports the diagnosis, but no candidate plan
+  was reproduced. It does not mean an optimization was executed or verified in production.
 - `plan_verified`: the target-version local standalone TiDB reproduced the intended plan from the
   full SQL with schema and stats loaded.
-- `prod_verified`: production runtime evidence confirms the selected recommendation or diagnosis;
-  it does not imply that local plan validation ran.
 
 Production historical plans and production-safe static `EXPLAIN` are supporting evidence only.
-They cannot set `plan_verified`. Historical plan existence without confirming runtime evidence
-cannot set `prod_verified` either.
+They cannot set `plan_verified`. Historical plan existence without runtime evidence that directly
+supports the diagnosis cannot set `observed` either.
 
 Use validation status examples:
 
 - `locally verified by EXPLAIN`
 - `plan already recovered`
 - `locally explored by EXPLAIN EXPLORE`
-- `production verified`
+- `observed in production runtime evidence`
 - `rejected`
 - `inferred`
 - `not run`
@@ -472,8 +472,9 @@ Set `plan_validation_status: passed` only when the local TiDB version matches th
 the full SQL was used, schema and stats were loaded, the complete baseline was captured, and all
 three answers are `true`. A plan-changing action also requires the complete candidate plan and
 `reproduction_kind: candidate`; a naturally recovered baseline uses
-`reproduction_kind: baseline_recovered`. Track production validation independently with
-`production_validation_status`; never infer one status from the other.
+`reproduction_kind: baseline_recovered`. Track production runtime evidence independently with
+`runtime_evidence_status`; runtime observation does not prove an optimization was executed or
+verified in production.
 
 Use `$autox-compare-plans` when multiple candidates or plan variants need normalized comparison,
 ranking, or rejection reasons.
@@ -512,7 +513,7 @@ Return this validation result directly. Optionally write or update run-local `ma
     "source_commit": "",
     "reproduction_kind": "",
     "plan_validation_status": "not_run",
-    "production_validation_status": "not_run",
+    "runtime_evidence_status": "not_observed",
     "baseline_plan_captured": false,
     "candidate_plan_captured": false,
     "baseline_matches_expected_shape": false,

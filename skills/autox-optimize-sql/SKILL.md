@@ -111,6 +111,12 @@ Follow this order for a focused digest or SQL:
 For top-N or batch diagnosis, read `workflow/batch-diagnosis/SUBSKILL.md` first. The batch
 subskill must still run the full focused workflow for each selected digest.
 
+Do not present a batch as finished while any selected digest is queued, running, retryable, or
+invalid. Treat quota, transport, authentication, and agent interruption as pause-and-resume events,
+not batch completion. Run `scripts/validate_batch.py` before claiming completion. Reduce an explicit
+top-N only after the user authorizes the new scope and retain that scope change in the batch
+manifest.
+
 ## Diagnosis Loading Rule
 
 After `problem_profile_built`, read `workflow/diagnosis-classification/SUBSKILL.md`.
@@ -181,5 +187,6 @@ was run.
 Do not claim runtime improvement from local static `EXPLAIN` alone.
 
 Use `plan_verified` only when a target-version local standalone TiDB reproduces the intended plan
-from the full SQL with schema and stats loaded. `prod_verified` records independent production
-runtime evidence and does not imply that local plan validation ran.
+from the full SQL with schema and stats loaded. Use `observed` when production runtime evidence
+directly supports the diagnosis but no candidate plan was reproduced. `observed` does not mean an
+optimization was executed or verified in production.

@@ -39,6 +39,11 @@ Use these defaults:
 Do not silently reduce an explicit `top_n`. If resource or execution limits prevent completing the
 requested count in one run, preserve the full queue and resume from the batch manifest.
 
+Preserve the original request as `requested_top_n` and the currently authorized scope as
+`effective_top_n`. They start equal. Change `effective_top_n` only after the user explicitly
+authorizes a smaller scope; retain `from_top_n`, `to_top_n`, authorization, and reason in
+`scope_change`. Preserve removed queue records with `status: excluded_by_user` for audit.
+
 ## Parent Resolution and Ranking
 
 Resolve the shared batch context once:
@@ -193,8 +198,15 @@ Track only the run-local orchestration status needed by the current batch:
 
 - `queued`;
 - `running`;
+- `retry_pending`;
 - `completed`;
-- `failed`.
+- `failed`;
+- `excluded_by_user` after an explicit user-authorized scope reduction.
+
+Use `retry_pending`, not `failed`, for quota exhaustion, transport errors, authentication
+interruptions, agent/process interruption, and other retryable orchestration failures. Persist the
+current stage, blocker, and resume point before yielding. Resume automatically when execution can
+continue.
 
 A failed child must preserve:
 
@@ -230,7 +242,8 @@ Before cleanup, the child self-audit must confirm all applicable checks:
   arms;
 - `plan_verified` retains target/local version, source commit, schema/stats/full-SQL flags,
   complete baseline/candidate plan flags, and all three successful plan-validation booleans;
-- `prod_verified` retains production runtime evidence and does not imply local plan validation;
+- `observed` retains production runtime evidence that directly supports the diagnosis and does not
+  imply that an optimization was executed or verified in production;
 - `Plan before` contains the complete production runtime plan, preferably slow-log
   `decoded_plan`;
 - `Plan before` preserves `actRows`, execution info, process/total keys, cop details, memory, and
@@ -253,7 +266,7 @@ New cases must pass without compatibility flags; `--allow-legacy-report-name` is
 reports created before the canonical `report/report.md` contract, and
 `--allow-legacy-report-format` is only for auditing reports created before the current
 action-specific contract. `--allow-legacy-validation-evidence` is only for auditing cases created
-before independent plan and production validation evidence was retained.
+before independent plan validation and runtime evidence status were retained.
 It must not require a child manifest or other persistent case state, and it must not require
 `plans/production_before`, `decision`, evidence files, or candidate artifacts when the compact
 manifest says raw artifacts were cleaned.
@@ -266,22 +279,74 @@ still invalid.
 If a gate fails, leave the child `running` for retry or mark it `failed` with the blocker. Do not
 merge an incomplete case as a completed recommendation.
 
-## Aggregate Summary
+Mark a child `failed` only for a non-retryable workflow failure after safe in-scope retries are
+exhausted. A retryable failure remains `retry_pending`.
 
-Create `batch-summary.md` only as an index of focused results. It is not a substitute for the
-focused report and must not copy full SQL, plans, candidate artifacts, or detailed diagnosis.
+## Batch Completion Gate
 
-Include one row per selected digest with:
+Track `batch_status` independently from child status:
 
-- rank;
-- digest;
-- aggregate impact used for ranking;
-- child status and current stage;
-- customer-facing recommended action when diagnosis completed;
-- validation level;
-- strongest concrete candidate signal, including an unselected advisory Index candidate;
-- focused report path;
-- concise blocker when failed.
+- `running`: work can continue and at least one child is not completed;
+- `paused`: work is expected to resume but cannot continue immediately because of quota,
+  transport, authentication, approval, or agent/process interruption;
+- `completed`: every child in `effective_top_n` is `completed` and has a valid retained handoff;
+- `incomplete`: at least one child has a non-retryable `failed` result or parent resolution failed.
+
+Before claiming completion:
+
+1. Recompute child-status counts from the manifest.
+2. Confirm the case count equals `requested_top_n`, the non-excluded count equals
+   `effective_top_n`, and target identities `(cluster_id, digest)` are unique.
+3. If `effective_top_n` differs from `requested_top_n`, confirm `scope_change.authorized_by_user`
+   is `true` and its previous/new counts match.
+4. Run `../../scripts/validate_case.py` for every completed child.
+5. Confirm `batch-summary.md` exists and includes explicit requested/effective scope and progress.
+6. Run `../../scripts/validate_batch.py <batch-workspace>` and require success.
+
+Never use `completed`, `finished`, `done`, or equivalent user-facing wording while any child is
+`queued`, `running`, `retry_pending`, `failed`, or invalid. For `paused`, provide only a progress
+snapshot and resume information; do not produce or present a final aggregate report. For
+`incomplete`, state explicitly that the batch did not finish and list the blockers.
+
+## Batch Main Report
+
+Use `batch-summary.md` as the only canonical batch main report. Do not create a second
+`final-report.md`, executive report, or alternate aggregate report with a different format. The
+main report is an index of focused results, not a substitute for them; do not copy full SQL, plans,
+candidate artifacts, detailed diagnoses, synthesized findings, or priority advice into it.
+
+Use exactly this structure and heading order:
+
+```markdown
+# AutoX Slow SQL Batch Report
+
+## Batch
+
+- Status: `<completed>`
+- Scope: `<effective scope; include original requested scope and authorized reduction>`
+- Progress: `<completed>/<effective_top_n>`
+- Time range: `<business time range and timezone>`
+- Ranking: `<ranking key>`
+- Coverage: `<collection coverage or not applicable>`
+- Safety: `Production read-only; no binding, index, configuration, or DDL changes were applied.`
+
+## Summary
+
+- Impact: `<aggregate executions and latency>`
+- Actions: `<counts by contracted recommended_action>`
+- Validation levels: `<counts for inferred, observed, and plan_verified>`
+
+## Cases
+
+| Rank | Cluster | Impact | Action | Validation | Report |
+|---:|---|---:|---|---|---|
+| 1 | <cluster name> | <latency / executions> | <recommended_action> | <validation_level> | [report](cases/<diagnosis_id>/report/report.md) |
+```
+
+The Cases table must contain exactly these six columns in this order. Do not add Digest, Status,
+Stage, Signal, Candidate, Confidence, Blocker, or other columns. Include one row per completed case
+inside `effective_top_n`; keep detailed evidence, blockers, candidate IDs, and recommendations in
+the linked focused report or internal manifest.
 
 Render the focused report as a Markdown link relative to `batch-summary.md`, for example
 `[report.md](cases/<diagnosis_id>/report/report.md)`. Do not emit an absolute filesystem path in
@@ -294,8 +359,14 @@ justified optimizer action, use `No optimizer action`.
 Reference each focused report path instead of summarizing its plans. Do not rewrite or normalize a
 child's recommendation in the aggregate summary.
 
-Only completed children count toward completed recommendation totals. Keep failed and queued cases
-visible so a partial batch cannot look complete.
+Only completed children count toward completed recommendation totals. Do not render a canonical
+main report for `running`, `paused`, or `incomplete` batches; provide a progress update from the
+manifest instead so a partial batch cannot look complete.
+
+The Batch section must preserve original `requested_top_n`, `effective_top_n`, explicit
+user-authorized scope reduction when applicable, and collection coverage. The internal manifest,
+not the six-column Cases table, retains queued, running, retry-pending, failed, excluded, blocker,
+and candidate details.
 
 ## Optional Resume Rules
 
@@ -307,9 +378,11 @@ requires this file. When the user asks to resume and the file exists:
 3. Skip children with `status: completed` and a valid focused report path.
 4. Resume `running` children only when their workspace and required artifacts still exist and the
    immediately preceding workflow output is complete; otherwise restart that digest diagnosis.
-5. Retry or restart failed children only within their existing digest scope; generate a new
+5. Resume `retry_pending` children from the recorded stage when artifacts are trustworthy;
+   otherwise restart that digest diagnosis without changing the selected scope.
+6. Retry or restart failed children only within their existing digest scope; generate a new
    `diagnosis_id` if isolation artifacts are no longer trustworthy.
-6. Continue queued children under the same concurrency limit.
+7. Continue queued children under the same concurrency limit.
 
 Do not silently change the selected digest set, ranking window, or top-N count during resume.
 
@@ -322,12 +395,28 @@ evidence and reports remain in child workspaces.
 {
   "batch_id": "",
   "cluster_id": "",
+  "batch_status": "running | paused | completed | incomplete",
   "time_range": {
     "business": "",
     "utc": "",
     "timezone": ""
   },
-  "top_n": 0,
+  "requested_top_n": 0,
+  "effective_top_n": 0,
+  "scope_change": {
+    "authorized_by_user": true,
+    "from_top_n": 0,
+    "to_top_n": 0,
+    "reason": ""
+  },
+  "status_counts": {
+    "queued": 0,
+    "running": 0,
+    "retry_pending": 0,
+    "completed": 0,
+    "failed": 0,
+    "excluded_by_user": 0
+  },
   "max_concurrency": 5,
   "dispatch_mode": "subagent_per_digest",
   "ranking_path": "",
@@ -337,15 +426,15 @@ evidence and reports remain in child workspaces.
       "rank": 0,
       "digest": "",
       "diagnosis_id": "",
-      "status": "queued",
+      "status": "queued | running | retry_pending | completed | failed | excluded_by_user",
       "recommended_action": "",
       "validation_level": "",
       "plan_validation_status": "not_run | passed | failed",
-      "production_validation_status": "not_run | passed | failed",
+      "runtime_evidence_status": "not_observed | observed | failed",
       "candidate_signal": {
         "type": "",
         "candidate_id": "",
-        "status": "none | advisory | plan_verified | rejected"
+        "status": "none | advisory | observed | plan_verified | rejected"
       },
       "report_path": "",
       "failed_stage": "",
@@ -355,6 +444,8 @@ evidence and reports remain in child workspaces.
 }
 ```
 
-When the optional manifest is used, update the corresponding child record after each orchestration
-status change. A batch is complete only when every selected digest is `completed` or `failed` and
-the aggregate summary references the final state of every selected digest.
+When the optional manifest is used, update the corresponding child record and `status_counts` after
+each orchestration status change. A batch is complete only when every selected digest in the
+effective user-authorized scope is `completed`, every retained child handoff validates, the
+aggregate summary references every selected digest, and `validate_batch.py` passes. A batch with
+any failed child is `incomplete`, not completed.

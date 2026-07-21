@@ -257,10 +257,10 @@ Inference:
 <mechanism derived from the observed facts>
 
 Validation and risks:
-- Validation status: <production verified | locally verified | rejected | inferred | not run>
-- Validation level: <inferred | plan_verified | prod_verified>
+- Validation status: <observed in production runtime evidence | locally verified | rejected | inferred | not run>
+- Validation level: <inferred | observed | plan_verified>
 - Plan validation status: <not_run | passed | failed>
-- Production validation status: <not_run | passed | failed>
+- Runtime evidence status: <not_observed | observed | failed>
 - Advisory gate: <passed | failed | not applicable>
 - Selected candidate ID: <candidate id>
 - Missing evidence or blocker: <exact blocker or none>

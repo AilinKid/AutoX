@@ -34,9 +34,7 @@ class ValidateCaseTest(unittest.TestCase):
             "validation_level": level,
             "report_path": "report/report.md",
             "plan_validation_status": "passed" if level == "plan_verified" else "not_run",
-            "production_validation_status": (
-                "passed" if level == "prod_verified" else "not_run"
-            ),
+            "runtime_evidence_status": "observed" if level == "observed" else "not_observed",
         }
         if level == "plan_verified":
             result["plan_validation"] = {
@@ -62,11 +60,11 @@ class ValidateCaseTest(unittest.TestCase):
                 "optimizer_selected_expected_path": True,
                 "plan_shape_matches_diagnosis": True,
             }
-        if level == "prod_verified":
-            result["production_validation"] = {
-                "validation_source": "production_runtime",
+        if level == "observed":
+            result["runtime_observation"] = {
+                "observation_source": "production_runtime",
                 "runtime_evidence_observed": True,
-                "conclusion_confirmed": True,
+                "diagnosis_supported": True,
                 "evidence_reference": "report.md#observed-evidence",
             }
         if advisory_gate is not None:
@@ -85,7 +83,7 @@ CREATE INDEX idx_a ON t (a);
 ```"""
             candidate_plan = (
                 "Covering IndexReader; candidate plan was not reproduced"
-                if level == "inferred"
+                if level in {"inferred", "observed"}
                 else "Covering IndexReader using idx_a"
             )
             plans = f"""\n\n## Plans Before & After
@@ -123,7 +121,7 @@ Validation and risks:
 - Validation status: {validation_status}
 - Validation level: {level}
 - Plan validation status: {result['plan_validation_status']}
-- Production validation status: {result['production_validation_status']}
+- Runtime evidence status: {result['runtime_evidence_status']}
 - Advisory gate: {advisory_gate or 'not applicable'}
 - Selected candidate ID: idx_a
 - Missing evidence or blocker: candidate plan was not reproduced
@@ -168,23 +166,30 @@ Validation and risks:
     def test_inferred_index_without_passed_advisory_gate_is_invalid(self) -> None:
         workspace = self.write_case("Index first", "inferred", None)
         self.assertIn(
-            "inferred Index first lacks passed advisory_gate",
+            "unverified Index first lacks passed advisory_gate",
             self.validate(workspace),
         )
+
+    def test_observed_index_with_passed_advisory_gate_is_valid(self) -> None:
+        workspace = self.write_case(
+            "Index first", "observed", "passed",
+            validation_status="observed in production runtime evidence",
+        )
+        self.assertEqual([], self.validate(workspace))
 
     def test_rejected_index_cannot_use_advisory_fallback(self) -> None:
         workspace = self.write_case(
             "Index first", "inferred", "passed", validation_status="rejected"
         )
         self.assertIn(
-            "inferred Index first has invalid validation status",
+            "unverified Index first has invalid validation status",
             self.validate(workspace),
         )
 
     def test_inferred_binding_is_invalid(self) -> None:
         workspace = self.write_case("Binding first", "inferred", "passed")
         self.assertIn(
-            "optimizer action is not plan_verified or prod_verified",
+            "optimizer action is not plan_verified",
             self.validate(workspace),
         )
 
@@ -217,26 +222,26 @@ Validation and risks:
         )
         self.assertEqual([], self.validate(workspace))
 
-    def test_prod_verified_does_not_imply_plan_verified(self) -> None:
+    def test_observed_does_not_imply_plan_verified(self) -> None:
         workspace = self.write_case(
-            "Investigate non-optimizer bottleneck", "prod_verified", None,
-            validation_status="production verified",
+            "Investigate non-optimizer bottleneck", "observed", None,
+            validation_status="observed in production runtime evidence",
         )
         result = json.loads((workspace / "result.json").read_text(encoding="utf-8"))
         self.assertEqual("not_run", result["plan_validation_status"])
         self.assertEqual([], self.validate(workspace))
 
-    def test_prod_verified_requires_runtime_evidence(self) -> None:
+    def test_observed_requires_runtime_evidence(self) -> None:
         workspace = self.write_case(
-            "Investigate non-optimizer bottleneck", "prod_verified", None,
-            validation_status="production verified",
+            "Investigate non-optimizer bottleneck", "observed", None,
+            validation_status="observed in production runtime evidence",
         )
         result_path = workspace / "result.json"
         result = json.loads(result_path.read_text(encoding="utf-8"))
-        result["production_validation"]["validation_source"] = "historical_plan"
+        result["runtime_observation"]["observation_source"] = "historical_plan"
         result_path.write_text(json.dumps(result), encoding="utf-8")
         self.assertIn(
-            "production_validation source must be production_runtime",
+            "runtime_observation source must be production_runtime",
             self.validate(workspace),
         )
 
@@ -245,12 +250,12 @@ Validation and risks:
         result_path = workspace / "result.json"
         result = json.loads(result_path.read_text(encoding="utf-8"))
         result.pop("plan_validation_status")
-        result.pop("production_validation_status")
+        result.pop("runtime_evidence_status")
         result_path.write_text(json.dumps(result), encoding="utf-8")
         report = workspace / "report" / "report.md"
         text = report.read_text(encoding="utf-8")
         text = re.sub(
-            r"^- (?:Plan|Production) validation status:.*\n",
+            r"^- (?:Plan validation|Runtime evidence) status:.*\n",
             "",
             text,
             flags=re.MULTILINE,

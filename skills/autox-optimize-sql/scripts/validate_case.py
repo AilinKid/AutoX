@@ -18,8 +18,9 @@ ALLOWED_ACTIONS = {
     "Investigate non-optimizer bottleneck",
     "No optimizer action",
 }
-ALLOWED_VALIDATION_LEVELS = {"inferred", "plan_verified", "prod_verified"}
+ALLOWED_VALIDATION_LEVELS = {"inferred", "observed", "plan_verified"}
 ALLOWED_VALIDATION_STATUSES = {"not_run", "passed", "failed"}
+ALLOWED_RUNTIME_EVIDENCE_STATUSES = {"not_observed", "observed", "failed"}
 PLAN_CHANGING_ACTIONS = {"Binding first", "Index first", "TiFlash / MPP first"}
 PLAN_REPORT_HEADINGS = ["Conclusion", "Plans Before & After", "Analysis"]
 NON_PLAN_REPORT_HEADINGS = ["Conclusion", "Analysis"]
@@ -137,17 +138,17 @@ def validate_validation_evidence(action: str, result: dict[str, Any], errors: li
 
     level = result.get("validation_level")
     plan_status = result.get("plan_validation_status")
-    production_status = result.get("production_validation_status")
+    runtime_status = result.get("runtime_evidence_status")
     if plan_status not in ALLOWED_VALIDATION_STATUSES:
         errors.append("invalid or missing plan_validation_status")
-    if production_status not in ALLOWED_VALIDATION_STATUSES:
-        errors.append("invalid or missing production_validation_status")
+    if runtime_status not in ALLOWED_RUNTIME_EVIDENCE_STATUSES:
+        errors.append("invalid or missing runtime_evidence_status")
 
     expected_level = (
-        "prod_verified"
-        if production_status == "passed"
-        else "plan_verified"
+        "plan_verified"
         if plan_status == "passed"
+        else "observed"
+        if runtime_status == "observed"
         else "inferred"
     )
     if level in ALLOWED_VALIDATION_LEVELS and level != expected_level:
@@ -195,30 +196,30 @@ def validate_validation_evidence(action: str, result: dict[str, Any], errors: li
                 if plan.get("baseline_matches_expected_shape") is not True:
                     errors.append("plan_validation baseline_matches_expected_shape must be true")
 
-    if production_status == "passed":
-        production = result.get("production_validation")
-        if not isinstance(production, dict):
-            errors.append("prod_verified result missing production_validation evidence")
+    if runtime_status == "observed":
+        observation = result.get("runtime_observation")
+        if not isinstance(observation, dict):
+            errors.append("observed runtime evidence missing runtime_observation")
         else:
             require_keys(
-                production,
+                observation,
                 (
-                    "validation_source", "runtime_evidence_observed",
-                    "conclusion_confirmed", "evidence_reference",
+                    "observation_source", "runtime_evidence_observed",
+                    "diagnosis_supported", "evidence_reference",
                 ),
-                "production_validation",
+                "runtime_observation",
                 errors,
             )
-            if production.get("validation_source") != "production_runtime":
-                errors.append("production_validation source must be production_runtime")
-            if production.get("runtime_evidence_observed") is not True:
-                errors.append("production_validation runtime_evidence_observed must be true")
-            if production.get("conclusion_confirmed") is not True:
-                errors.append("production_validation conclusion_confirmed must be true")
-            if not isinstance(production.get("evidence_reference"), str) or not production.get(
+            if observation.get("observation_source") != "production_runtime":
+                errors.append("runtime_observation source must be production_runtime")
+            if observation.get("runtime_evidence_observed") is not True:
+                errors.append("runtime_observation runtime_evidence_observed must be true")
+            if observation.get("diagnosis_supported") is not True:
+                errors.append("runtime_observation diagnosis_supported must be true")
+            if not isinstance(observation.get("evidence_reference"), str) or not observation.get(
                 "evidence_reference"
             ):
-                errors.append("production_validation evidence_reference must be non-empty")
+                errors.append("runtime_observation evidence_reference must be non-empty")
 
 
 def validate_report(workspace: Path, result: dict[str, Any], errors: list[str],
@@ -299,7 +300,7 @@ def validate_completed(workspace: Path, result: dict[str, Any], report_text: str
     if (recommendation.get("validation_level") is not None
             and recommendation.get("validation_level") != level):
         errors.append("manifest validation_level does not match result.json")
-    for status_key in ("plan_validation_status", "production_validation_status"):
+    for status_key in ("plan_validation_status", "runtime_evidence_status"):
         if (recommendation.get(status_key) is not None
                 and recommendation.get(status_key) != result.get(status_key)):
             errors.append(f"manifest {status_key} does not match result.json")
@@ -344,7 +345,7 @@ def validate_completed(workspace: Path, result: dict[str, Any], report_text: str
         validate_analysis(report_text, errors)
     markers = ["Validation level:"]
     if not allow_legacy_validation_evidence:
-        markers.extend(("Plan validation status:", "Production validation status:"))
+        markers.extend(("Plan validation status:", "Runtime evidence status:"))
     if action in PLAN_CHANGING_ACTIONS or allow_legacy_report_format:
         markers.extend(("Plan before:", "Plan after:"))
     for marker in markers:
@@ -363,19 +364,20 @@ def validate_completed(workspace: Path, result: dict[str, Any], report_text: str
         if not recommendation.get("selected_candidate_id") and not report_candidate:
             errors.append("optimizer action missing selected_candidate_id")
     if action == "Index first":
-        if level == "inferred":
+        if level in {"inferred", "observed"}:
             if result.get("advisory_gate") != "passed":
-                errors.append("inferred Index first lacks passed advisory_gate")
+                errors.append("unverified Index first lacks passed advisory_gate")
             if not re.search(r"^\s*- Advisory gate:\s*passed\s*$", report_text,
                              re.MULTILINE | re.IGNORECASE):
-                errors.append("inferred Index first report lacks Advisory gate: passed")
-            if not re.search(r"^\s*- Validation status:\s*(?:not run|inferred)\s*$",
+                errors.append("unverified Index first report lacks Advisory gate: passed")
+            if not re.search(
+                    r"^\s*- Validation status:\s*(?:not run|inferred|observed in production runtime evidence)\s*$",
                              report_text, re.MULTILINE | re.IGNORECASE):
-                errors.append("inferred Index first has invalid validation status")
+                errors.append("unverified Index first has invalid validation status")
             if not re.search(r"candidate plan was not reproduced|plan was not reproduced",
                              report_text, re.IGNORECASE):
-                errors.append("inferred Index first does not disclose missing plan reproduction")
-        elif level not in {"plan_verified", "prod_verified"}:
+                errors.append("unverified Index first does not disclose missing plan reproduction")
+        elif level != "plan_verified":
             errors.append("Index first has invalid validation level")
         if re.search(r"Review-only SQL:\s*(?:Review only[^\n]*\n)?```sql\s*none\s*```",
                      report_text, re.IGNORECASE):
@@ -383,8 +385,8 @@ def validate_completed(workspace: Path, result: dict[str, Any], report_text: str
         if not re.search(r"create\s+index", report_text, re.IGNORECASE):
             errors.append("Index first lacks concrete review-only CREATE INDEX")
     elif action in {"Binding first", "TiFlash / MPP first"}:
-        if level not in {"plan_verified", "prod_verified"}:
-            errors.append("optimizer action is not plan_verified or prod_verified")
+        if level != "plan_verified":
+            errors.append("optimizer action is not plan_verified")
 
 
 def validate(args: argparse.Namespace) -> tuple[dict[str, Any], list[str], list[str]]:

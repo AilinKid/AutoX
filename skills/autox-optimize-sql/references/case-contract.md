@@ -30,8 +30,9 @@ For a batch diagnosis, also require:
 - one unique child `diagnosis_id` per selected digest.
 - one isolated child workspace per selected digest.
 
-Batch orchestration may track `queued`, `running`, `completed`, or `failed` in memory or in an
-optional run-local manifest.
+Batch orchestration may track child states `queued`, `running`, `retry_pending`, `completed`,
+`failed`, or `excluded_by_user` in memory or in an optional run-local manifest. Track the batch
+itself as `running`, `paused`, `completed`, or `incomplete`.
 
 ## Workflow Handoffs
 
@@ -194,21 +195,20 @@ Use these validation levels consistently:
 
 - `inferred`: no candidate plan was reproduced; recommendation follows from evidence and
   optimizer reasoning.
+- `observed`: production runtime evidence directly supports the diagnosis, but no candidate plan
+  was reproduced. It does not mean an optimization was executed or verified in production.
 - `plan_verified`: a target-version local standalone TiDB reproduced the intended plan shape from
   the full SQL after loading the required schema and statistics.
-- `prod_verified`: production runtime evidence confirms the selected recommendation or
-  non-optimizer diagnosis.
 
-These are evidence-source labels, not an inheritance hierarchy. `prod_verified` does not imply
-`plan_verified`, and a historical production plan or production-safe static `EXPLAIN` does not
-count as local plan verification.
+A historical production plan or production-safe static `EXPLAIN` does not count as local plan
+verification. AutoX is read-only and currently has no production-verification level.
 
 Validation status examples:
 
 - `locally verified by EXPLAIN`
 - `plan already recovered`
 - `locally explored by EXPLAIN EXPLORE`
-- `production verified`
+- `observed in production runtime evidence`
 - `rejected`
 - `inferred`
 - `not run`
@@ -220,9 +220,8 @@ Rules:
   and stats, a complete baseline `EXPLAIN FORMAT='verbose'`, and all three plan-validation booleans
   set to `true`. Plan-changing actions also require a complete candidate plan. A naturally
   recovered baseline instead records `reproduction_kind: baseline_recovered`.
-- Do not mark a result `prod_verified` without production runtime or approved production
-  validation evidence that directly confirms the recommendation or diagnosis. Historical plan
-  existence alone is supporting evidence, not production verification.
+- Mark a result `observed` only when retained production runtime evidence directly supports the
+  diagnosis. Historical plan existence alone is supporting evidence, not an observed diagnosis.
 - If matching TiDB version, schema, and stats are available, local validation is mandatory
   before final report.
 - If validation cannot run, record the exact blocker.
@@ -240,12 +239,12 @@ Every optimizer candidate plan-validation result must answer:
 All three values must be `true` before Binding or TiFlash/MPP SQL may appear in the final
 `Review-only SQL` field or any optimizer recommendation may be marked `plan_verified`.
 
-Every retained `result.json` must record the two validation dimensions separately:
+Every retained `result.json` must record plan validation and runtime evidence separately:
 
 ```json
 {
   "plan_validation_status": "not_run | passed | failed",
-  "production_validation_status": "not_run | passed | failed"
+  "runtime_evidence_status": "not_observed | observed | failed"
 }
 ```
 
@@ -273,14 +272,14 @@ For `validation_level: plan_verified`, retain this compact shape in `result.json
 }
 ```
 
-For `validation_level: prod_verified`, retain:
+For `validation_level: observed`, retain:
 
 ```json
 {
-  "production_validation": {
-    "validation_source": "production_runtime",
+  "runtime_observation": {
+    "observation_source": "production_runtime",
     "runtime_evidence_observed": true,
-    "conclusion_confirmed": true,
+    "diagnosis_supported": true,
     "evidence_reference": ""
   }
 }
@@ -388,7 +387,7 @@ retained manifest:
     "validation_status": "",
     "validation_level": "",
     "plan_validation_status": "not_run | passed | failed",
-    "production_validation_status": "not_run | passed | failed",
+    "runtime_evidence_status": "not_observed | observed | failed",
     "advisory_gate": "not_applicable | passed | failed",
     "report_path": ""
   },
@@ -451,9 +450,31 @@ Agent process exit is transport state, not case validity. If a retry exits nonze
 already valid retained handoff; classify the transport error only when the final handoff validator
 still fails.
 
+Quota exhaustion, transport errors, authentication interruptions, and agent/process interruption
+are retryable orchestration events. Keep the affected child `retry_pending` or `running`, set the
+batch to `paused` when execution cannot continue immediately, persist the remaining queue, and
+resume from the manifest. Do not convert a retryable interruption into child `failed` or batch
+`completed`.
+
+Set `batch_status: completed` only when every child in the effective user-authorized scope is
+`completed` and passes `scripts/validate_case.py`, the aggregate summary exists, and
+`scripts/validate_batch.py` passes. Any child `failed` makes the batch `incomplete`, not completed.
+Any `queued`, `running`, or `retry_pending` child keeps the batch `running` or `paused`. Do not send
+a final finished message for `running`, `paused`, or `incomplete` batches.
+
+Preserve the original requested scope separately from the effective scope. If they differ, require
+a recorded user-authorized scope change with the previous count, new count, and reason. Preserve
+removed queue entries as `excluded_by_user`. Resource limits alone never authorize silent scope
+reduction.
+
 The parent must not diagnose a child digest, invent its candidates, or rewrite its recommendation.
 The aggregate summary references focused report paths and does not copy full SQL, plans, or
 candidate details.
+
+Use `batch-summary.md` as the only canonical batch main report. Its only top-level sections after
+the title are `Batch`, `Summary`, and `Cases`. The Cases table has exactly six columns in this
+order: `Rank`, `Cluster`, `Impact`, `Action`, `Validation`, `Report`. Do not expose internal
+candidate signals or IDs in the main report.
 
 Keep the batch manifest compact. Each child record should contain only:
 
@@ -463,6 +484,9 @@ Keep the batch manifest compact. Each child record should contain only:
 - recommended action and validation level when completed;
 - focused report path;
 - failed stage and concise blocker when failed.
+
+The batch record should also retain `batch_status`, `requested_top_n`, `effective_top_n`, explicit
+scope-change authorization when applicable, and derived child-status counts.
 
 If subagents are unavailable, record a sequential fallback and run each digest under the same
 complete focused workflow. This fallback does not permit skipped stages.
