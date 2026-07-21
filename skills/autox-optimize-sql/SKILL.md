@@ -1,6 +1,6 @@
 ---
 name: autox-optimize-sql
-description: Diagnose slow SQL in a TiDB Cloud cluster and produce evidence-backed execution recommendations such as Binding, Index, TiFlash/MPP, non-optimizer investigation, or no optimizer action. Use when the user provides a cluster_id, optionally with a SQL digest, slow SQL text, or time range, and asks for slow-query diagnosis, execution-plan analysis, binding suggestions, index recommendations, or automatic cluster slow-SQL triage. Query cluster metadata, Slow Query, TopSQL, schema, and statistics through the clinic-api skill. This skill is read-only for the target cluster and must not execute bindings, create indexes, or modify production.
+description: Diagnose slow SQL in TiDB Cloud and produce evidence-backed execution recommendations such as Binding, Index, TiFlash/MPP, non-optimizer investigation, or no optimizer action. Use when the user provides a cluster_id, SQL digest, slow SQL text, or time range, or makes a generic cluster-diagnosis request such as "帮我看下集群诊断". Generic requests default to the global top 10 slow-query digests across all accessible active Dedicated clusters in the rolling last 24 hours. Query cluster metadata, Slow Query, TopSQL, schema, and statistics through the clinic-api skill. This skill is read-only and must not execute bindings, create indexes, or modify production.
 ---
 
 # AutoX Slow SQL Optimization
@@ -74,6 +74,16 @@ Do not continue to `problem_profile_built` while an involved user table has no c
 Running only `collect_slow_sql.py` does not satisfy this gate.
 
 ## Operating Model
+
+Route a generic cluster-diagnosis request with no cluster ID, digest, SQL text, time range, or
+top-N override to fleet batch mode. Discover every accessible active Dedicated cluster through
+Clinic metadata, rank `(cluster_id, digest)` candidates globally by total slow-query latency over
+the rolling last 24 hours, and run the complete focused workflow for the top 10. Treat 10 as a cap
+when fewer candidates exist. Explicit cluster scope, top-N, time range, or ranking instructions
+override these defaults.
+
+Every fleet child must still resolve one exact `cluster_id`; fleet mode does not weaken focused
+case identity, evidence, isolation, validation, or completion gates.
 
 For every diagnosis:
 

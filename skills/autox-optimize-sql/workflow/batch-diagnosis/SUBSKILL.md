@@ -6,7 +6,7 @@ description: Orchestrate AutoX top-N and multi-digest slow-SQL diagnosis with is
 # Batch Diagnosis
 
 Use this workflow subskill when the user asks for top slow queries, Top SQL, top-N digests,
-multiple digests, or a batch such as top 40 or top 200.
+multiple digests, a batch such as top 40 or top 200, or a generic fleet-wide cluster diagnosis.
 
 Read `../../references/case-contract.md` before applying this workflow.
 
@@ -16,9 +16,10 @@ with aggregate heuristics or one generic recommendation.
 
 ## Batch Inputs
 
-Require:
+Require one scope:
 
-- `cluster_id`.
+- one exact `cluster_id`; or
+- generic fleet scope resolved to all accessible active Dedicated cluster IDs.
 
 Accept:
 
@@ -30,14 +31,23 @@ Accept:
 
 Use these defaults:
 
-- `top_n`: the user-requested count; when omitted, choose a small high-impact set from ranked
-  slow-query candidates;
+- generic cluster diagnosis: all accessible active Dedicated clusters;
+- `top_n`: `10` when omitted, treated as a cap when fewer ranked candidates exist;
+- time range: rolling last 24 hours when omitted;
 - `max_concurrency`: `5`, unless the user explicitly chooses another value;
 - ranking: total slow-query latency in the target time range;
 - output: one focused report per digest plus one compact batch summary.
 
+Apply these defaults independently. An explicit value overrides only that value. Do not ask the
+user to confirm the default fleet, top-10, or 24-hour scope before making read-only Clinic calls.
+
 Do not silently reduce an explicit `top_n`. If resource or execution limits prevent completing the
 requested count in one run, preserve the full queue and resume from the batch manifest.
+
+When the default top-10 cap is used and fewer than 10 candidates exist, select every available
+candidate and record `top_n_source: default`, `top_n_cap: 10`, and the available count. This is not
+a user-scope reduction. Keep `requested_top_n` and `effective_top_n` equal to the selected available
+count so the completion gate reflects real work rather than nonexistent candidates.
 
 Preserve the original request as `requested_top_n` and the currently authorized scope as
 `effective_top_n`. They start equal. Change `effective_top_n` only after the user explicitly
@@ -46,7 +56,9 @@ authorizes a smaller scope; retain `from_top_n`, `to_top_n`, authorization, and 
 
 ## Parent Resolution and Ranking
 
-Resolve the shared batch context once:
+Resolve the shared batch context once.
+
+For one cluster:
 
 1. Resolve the exact cluster ID and collect cluster metadata.
 2. Resolve the business and UTC time range, including Slow Query and TopSQL partitions.
@@ -57,16 +69,36 @@ Resolve the shared batch context once:
 6. Select the requested number of unique digests after ranking. Multiple plan variants for one
    digest belong to the same focused case.
 
-Use the bundled `scripts/collect_slow_sql.py` ranking output. Preserve API errors explicitly and do
-not interpret collection failure as an empty ranking.
+For generic fleet mode:
 
-If parent cluster resolution, authentication, or ranking fails, stop the batch before creating
-child cases and report the exact failure. Do not create placeholder diagnoses without target
+1. List all Clinic pages using `deploy_type_v2=dedicated`, `cluster_status=active`, and
+   `show_deleted=false`; recheck each returned record and deduplicate by cluster ID.
+2. Record the complete discovered cluster set before Slow Query collection.
+3. Run digest-level Slow Query aggregation for every discovered cluster over the same exact
+   rolling 24-hour window.
+4. Preserve per-cluster ranking status as succeeded, empty, or failed with the exact blocker.
+5. Merge candidates as distinct `(cluster_id, digest)` targets and rank them globally by total
+   slow-query latency. Do not combine the same digest across clusters.
+6. Select up to 10 global targets unless the user supplied another top-N.
+
+Use `../../scripts/collect_fleet_slow_sql.py` for fleet discovery and ranking. A completed fleet
+must have successful ranking coverage for every discovered Dedicated cluster. Empty Slow Query
+results count as successful coverage; collection failures do not. Keep retryable failures pending
+or paused and never present partial cluster coverage as a completed fleet diagnosis.
+
+Use the bundled `scripts/collect_slow_sql.py` ranking output for one cluster. Preserve API errors
+explicitly and do not interpret collection failure as an empty ranking.
+
+If parent cluster resolution, authentication, or ranking fails, stop the single-cluster batch
+before creating child cases and report the exact failure. In fleet mode, preserve successful
+cluster rankings but keep the fleet paused or incomplete until every discovered cluster has a
+successful or explicitly empty ranking result. Do not create placeholder diagnoses without target
 digests.
 
 ## Workspace and Isolation
 
-Generate one globally unique `batch_id` and one globally unique `diagnosis_id` per digest.
+Generate one globally unique `batch_id` and one globally unique `diagnosis_id` per selected
+`(cluster_id, digest)` target.
 
 Use a parent workspace with isolated child workspaces:
 
@@ -120,7 +152,8 @@ Each child case owns exactly one digest and must run the focused workflow in ord
 5. `../final-report/SUBSKILL.md`
 
 The child may inherit resolved cluster and time-range values from the parent, but it must return
-them with its output and validate that the digest belongs to the ranked result. It may also record
+them with its output and validate that the `(cluster_id, digest)` target belongs to the ranked
+result. It may also record
 them in an optional child manifest. Inherited context does not remove any evidence, diagnosis,
 validation, report, or cleanup step.
 
@@ -298,11 +331,13 @@ Before claiming completion:
 1. Recompute child-status counts from the manifest.
 2. Confirm the case count equals `requested_top_n`, the non-excluded count equals
    `effective_top_n`, and target identities `(cluster_id, digest)` are unique.
-3. If `effective_top_n` differs from `requested_top_n`, confirm `scope_change.authorized_by_user`
+3. For fleet mode, confirm every discovered Dedicated cluster has successful or explicitly empty
+   ranking coverage and no failed ranking record.
+4. If `effective_top_n` differs from `requested_top_n`, confirm `scope_change.authorized_by_user`
    is `true` and its previous/new counts match.
-4. Run `../../scripts/validate_case.py` for every completed child.
-5. Confirm `batch-summary.md` exists and includes explicit requested/effective scope and progress.
-6. Run `../../scripts/validate_batch.py <batch-workspace>` and require success.
+5. Run `../../scripts/validate_case.py` for every completed child.
+6. Confirm `batch-summary.md` exists and includes explicit requested/effective scope and progress.
+7. Run `../../scripts/validate_batch.py <batch-workspace>` and require success.
 
 Never use `completed`, `finished`, `done`, or equivalent user-facing wording while any child is
 `queued`, `running`, `retry_pending`, `failed`, or invalid. For `paused`, provide only a progress
@@ -372,6 +407,10 @@ user-authorized scope reduction when applicable, and collection coverage. The in
 not the six-column Cases table, retains queued, running, retry-pending, failed, excluded, blocker,
 and candidate details.
 
+For fleet mode, render `Coverage` as the discovered and successfully ranked Dedicated cluster
+counts, including any empty clusters. Do not say `completed` when any discovered cluster lacks a
+successful ranking query.
+
 ## Optional Resume Rules
 
 Resume is optional and requires a valid run-local `batch-manifest.json`. A fresh diagnosis never
@@ -398,7 +437,19 @@ evidence and reports remain in child workspaces.
 ```json
 {
   "batch_id": "",
+  "scope_mode": "single_cluster | dedicated_fleet",
   "cluster_id": "",
+  "cluster_scope": {
+    "selection": "all_accessible_active_dedicated",
+    "discovered_count": 0,
+    "cluster_ids": []
+  },
+  "ranking_coverage": {
+    "attempted_cluster_ids": [],
+    "succeeded_cluster_ids": [],
+    "empty_cluster_ids": [],
+    "failed_clusters": []
+  },
   "batch_status": "running | paused | completed | incomplete",
   "time_range": {
     "business": "",
@@ -407,6 +458,8 @@ evidence and reports remain in child workspaces.
   },
   "requested_top_n": 0,
   "effective_top_n": 0,
+  "top_n_source": "default | explicit",
+  "top_n_cap": 0,
   "scope_change": {
     "authorized_by_user": true,
     "from_top_n": 0,
@@ -428,6 +481,7 @@ evidence and reports remain in child workspaces.
   "cases": [
     {
       "rank": 0,
+      "cluster_id": "",
       "digest": "",
       "diagnosis_id": "",
       "status": "queued | running | retry_pending | completed | failed | excluded_by_user",

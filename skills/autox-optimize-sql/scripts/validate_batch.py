@@ -31,6 +31,7 @@ ALLOWED_ACTIONS = {
     "No optimizer action",
 }
 ALLOWED_VALIDATION_LEVELS = {"inferred", "observed", "plan_verified"}
+ALLOWED_SCOPE_MODES = {"single_cluster", "dedicated_fleet"}
 CJK_PATTERN = re.compile(
     r"[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF\u3040-\u30FF\uAC00-\uD7AF]"
 )
@@ -53,6 +54,110 @@ def load_manifest(path: Path, errors: list[str]) -> dict[str, Any]:
 
 def positive_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def string_set(value: Any, label: str, errors: list[str]) -> set[str]:
+    if not isinstance(value, list):
+        errors.append(f"{label} must be a list")
+        return set()
+    if any(not isinstance(item, str) or not item for item in value):
+        errors.append(f"{label} contains an invalid cluster ID")
+        return set()
+    result = set(value)
+    if len(result) != len(value):
+        errors.append(f"{label} contains duplicate cluster IDs")
+    return result
+
+
+def validate_cluster_scope(manifest: dict[str, Any], cases: list[dict[str, Any]],
+                           errors: list[str]) -> None:
+    scope_mode = manifest.get("scope_mode", "single_cluster")
+    if scope_mode not in ALLOWED_SCOPE_MODES:
+        errors.append("invalid scope_mode")
+        return
+    if scope_mode != "dedicated_fleet":
+        return
+
+    scope = manifest.get("cluster_scope")
+    if not isinstance(scope, dict):
+        errors.append("dedicated_fleet missing cluster_scope")
+        return
+    if scope.get("selection") != "all_accessible_active_dedicated":
+        errors.append("dedicated_fleet has invalid cluster selection")
+    cluster_ids = string_set(scope.get("cluster_ids"), "cluster_scope cluster_ids", errors)
+    if not cluster_ids:
+        errors.append("dedicated_fleet discovered no clusters")
+    if scope.get("discovered_count") != len(cluster_ids):
+        errors.append("cluster_scope discovered_count does not match cluster_ids")
+
+    coverage = manifest.get("ranking_coverage")
+    if not isinstance(coverage, dict):
+        errors.append("dedicated_fleet missing ranking_coverage")
+        return
+    attempted = string_set(
+        coverage.get("attempted_cluster_ids"),
+        "ranking_coverage attempted_cluster_ids",
+        errors,
+    )
+    succeeded = string_set(
+        coverage.get("succeeded_cluster_ids"),
+        "ranking_coverage succeeded_cluster_ids",
+        errors,
+    )
+    empty = string_set(
+        coverage.get("empty_cluster_ids"),
+        "ranking_coverage empty_cluster_ids",
+        errors,
+    )
+    failed_value = coverage.get("failed_clusters")
+    failed_ids: set[str] = set()
+    if not isinstance(failed_value, list):
+        errors.append("ranking_coverage failed_clusters must be a list")
+    else:
+        for index, failure in enumerate(failed_value):
+            if not isinstance(failure, dict):
+                errors.append(f"ranking_coverage failed_clusters[{index}] must be an object")
+                continue
+            cluster_id = failure.get("cluster_id")
+            blocker = failure.get("blocker")
+            if not isinstance(cluster_id, str) or not cluster_id:
+                errors.append(f"ranking_coverage failed_clusters[{index}] has invalid cluster ID")
+                continue
+            if cluster_id in failed_ids:
+                errors.append("ranking_coverage failed_clusters contains duplicate cluster IDs")
+            failed_ids.add(cluster_id)
+            if not isinstance(blocker, str) or not blocker.strip():
+                errors.append(f"ranking_coverage failed_clusters[{index}] missing blocker")
+
+    for label, values in (
+        ("attempted", attempted),
+        ("succeeded", succeeded),
+        ("empty", empty),
+        ("failed", failed_ids),
+    ):
+        if not values.issubset(cluster_ids):
+            errors.append(f"ranking_coverage {label} clusters are outside cluster_scope")
+    if not succeeded.issubset(attempted) or not failed_ids.issubset(attempted):
+        errors.append("ranking results contain clusters that were not attempted")
+    if not empty.issubset(succeeded):
+        errors.append("empty ranking clusters must be successful")
+    if succeeded & failed_ids:
+        errors.append("ranking cluster cannot be both succeeded and failed")
+
+    for index, case in enumerate(cases):
+        cluster_id = case.get("cluster_id")
+        if not isinstance(cluster_id, str) or not cluster_id:
+            errors.append(f"case[{index}] dedicated_fleet missing cluster_id")
+        elif cluster_id not in cluster_ids:
+            errors.append(f"case[{index}] cluster_id is outside dedicated fleet scope")
+
+    if manifest.get("batch_status") == "completed":
+        if attempted != cluster_ids:
+            errors.append("completed dedicated_fleet did not attempt every cluster")
+        if succeeded != cluster_ids:
+            errors.append("completed dedicated_fleet lacks successful coverage for every cluster")
+        if failed_ids:
+            errors.append("completed dedicated_fleet still has failed cluster rankings")
 
 
 def validate_scope(manifest: dict[str, Any], case_count: int, excluded_count: int,
@@ -271,6 +376,7 @@ def validate(workspace: Path, validate_children: bool = True) -> tuple[dict[str,
     errors: list[str] = []
     manifest = load_manifest(workspace / "batch-manifest.json", errors)
     cases, statuses = validate_cases(manifest.get("cases"), errors)
+    validate_cluster_scope(manifest, cases, errors)
     excluded = statuses.get("excluded_by_user", 0)
     _, effective = validate_scope(manifest, len(cases), excluded, errors)
     validate_status_counts(manifest, statuses, errors)

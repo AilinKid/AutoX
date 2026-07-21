@@ -198,6 +198,47 @@ class ValidateBatchTest(unittest.TestCase):
             self.validate(manifest, invalid),
         )
 
+    def fleet_manifest(self) -> dict[str, object]:
+        manifest = self.manifest(["completed", "completed"])
+        manifest["scope_mode"] = "dedicated_fleet"
+        manifest["cases"][0]["cluster_id"] = "cluster-a"  # type: ignore[index]
+        manifest["cases"][1]["cluster_id"] = "cluster-b"  # type: ignore[index]
+        manifest["cluster_scope"] = {
+            "selection": "all_accessible_active_dedicated",
+            "discovered_count": 2,
+            "cluster_ids": ["cluster-a", "cluster-b"],
+        }
+        manifest["ranking_coverage"] = {
+            "attempted_cluster_ids": ["cluster-a", "cluster-b"],
+            "succeeded_cluster_ids": ["cluster-a", "cluster-b"],
+            "empty_cluster_ids": ["cluster-b"],
+            "failed_clusters": [],
+        }
+        return manifest
+
+    def test_completed_dedicated_fleet_requires_full_ranking_coverage(self) -> None:
+        self.assertEqual([], self.validate(self.fleet_manifest()))
+
+    def test_completed_dedicated_fleet_rejects_unattempted_cluster(self) -> None:
+        manifest = self.fleet_manifest()
+        manifest["ranking_coverage"]["attempted_cluster_ids"] = ["cluster-a"]  # type: ignore[index]
+        manifest["ranking_coverage"]["succeeded_cluster_ids"] = ["cluster-a"]  # type: ignore[index]
+        errors = self.validate(manifest)
+        self.assertIn("completed dedicated_fleet did not attempt every cluster", errors)
+        self.assertIn(
+            "completed dedicated_fleet lacks successful coverage for every cluster", errors
+        )
+
+    def test_completed_dedicated_fleet_rejects_failed_cluster(self) -> None:
+        manifest = self.fleet_manifest()
+        manifest["ranking_coverage"]["succeeded_cluster_ids"] = ["cluster-a"]  # type: ignore[index]
+        manifest["ranking_coverage"]["empty_cluster_ids"] = []  # type: ignore[index]
+        manifest["ranking_coverage"]["failed_clusters"] = [  # type: ignore[index]
+            {"cluster_id": "cluster-b", "blocker": "query timeout"}
+        ]
+        errors = self.validate(manifest)
+        self.assertIn("completed dedicated_fleet still has failed cluster rankings", errors)
+
 
 if __name__ == "__main__":
     unittest.main()

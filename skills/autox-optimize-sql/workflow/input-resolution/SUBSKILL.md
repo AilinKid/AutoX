@@ -10,11 +10,25 @@ statistics collection.
 
 Read `../../references/case-contract.md` before applying this workflow.
 
-## Required Input
+## Input Modes
 
-Require:
+Focused mode requires:
 
 - `cluster_id`
+
+Generic fleet mode requires no user-supplied cluster ID. Use it when the user makes a broad
+cluster-diagnosis request such as `帮我看下集群诊断` without specifying cluster scope, digest, SQL
+text, time range, or top-N. In that mode:
+
+- list every accessible active Dedicated cluster through Clinic metadata, following all pages;
+- use a rolling 24-hour interval ending at the current time;
+- rank `(cluster_id, digest)` candidates globally by total slow-query latency;
+- select up to 10 candidates across the fleet;
+- hand off to `workflow/batch-diagnosis/SUBSKILL.md`.
+
+Explicit user input overrides only the corresponding default. For example, `top 20` changes the
+cap but keeps the all-Dedicated and 24-hour defaults; a supplied cluster ID changes the scope to
+that cluster but keeps the 24-hour and top-10 defaults when those values are omitted.
 
 Optional:
 
@@ -28,9 +42,9 @@ Optional:
 When the user provides a `cluster_id`, treat it as sufficient authorization to run the
 read-only diagnostic workflow.
 
-Only ask a blocking question when required input is missing or ambiguous:
+Only ask a blocking question when required focused input is missing or ambiguous:
 
-- no `cluster_id`;
+- no `cluster_id` and the request is not a generic fleet diagnosis;
 - multiple possible target clusters with the same identifier;
 - SQL text matches multiple digests equally and no digest was provided;
 - user provided an explicit business time range without timezone.
@@ -76,7 +90,7 @@ error, preserve the original error. Do not downgrade it to missing data.
 
 ## Resolve Cluster Context
 
-Use exact `cluster_id` lookup through Clinic cluster metadata.
+For focused mode, use exact `cluster_id` lookup through Clinic cluster metadata.
 
 Do not use the first result of a fuzzy query search.
 
@@ -103,6 +117,12 @@ If the cluster is not found, stop.
 
 If the cluster is deleted or unavailable, report the state and continue only with historical
 data that can still be collected.
+
+For generic fleet mode, use Clinic's paginated cluster list with `deploy_type_v2=dedicated`,
+`cluster_status=active`, and `show_deleted=false`. Recheck returned metadata and retain only exact
+Dedicated, active records. Do not rely on the endpoint's default page size. Record every discovered
+cluster ID and the success, empty result, or exact failure of its ranking query. Run
+`../../scripts/collect_fleet_slow_sql.py` for this read-only discovery and global ranking step.
 
 ## Resolve Time Range
 
@@ -153,9 +173,9 @@ If SQL text is provided without a digest, resolve the matching digest during Slo
 schema-aware collection. If multiple digests match, show the candidates and ask the user to
 choose. Do not silently select one.
 
-If neither digest nor SQL text is provided, rank digest candidates by total slow-query latency
-and select a small high-impact set for analysis. For explicit top-N requests, hand off to
-`workflow/batch-diagnosis/SUBSKILL.md`.
+If neither digest nor SQL text is provided, hand off to
+`workflow/batch-diagnosis/SUBSKILL.md`, rank digest candidates by total slow-query latency, and
+select up to 10 by default. This applies to one-cluster and generic fleet scope.
 
 ## Output Contract
 

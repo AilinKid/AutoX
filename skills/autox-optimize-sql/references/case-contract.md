@@ -27,8 +27,18 @@ across different `diagnosis_id` values.
 For a batch diagnosis, also require:
 
 - `batch_id`: globally unique ID for the parent batch.
-- one unique child `diagnosis_id` per selected digest.
+- `scope_mode`: `single_cluster` or `dedicated_fleet`.
+- one unique child `diagnosis_id` per selected `(cluster_id, digest)` target.
 - one isolated child workspace per selected digest.
+
+Generic cluster-diagnosis requests use `dedicated_fleet`, a rolling 24-hour window, and a global
+top-10 cap unless the user overrides the corresponding value. Fleet discovery must enumerate all
+accessible active Dedicated clusters before ranking. Every focused child still requires an exact
+`cluster_id`.
+
+When the default cap finds fewer than 10 candidates, `requested_top_n` and `effective_top_n` equal
+the available selected count; retain `top_n_source: default` and `top_n_cap: 10`. Do not create
+placeholder cases to reach the cap.
 
 Batch orchestration may track child states `queued`, `running`, `retry_pending`, `completed`,
 `failed`, or `excluded_by_user` in memory or in an optional run-local manifest. Track the batch
@@ -431,6 +441,11 @@ After cleanup, an optional retained compact manifest must still include:
 `workflow/batch-diagnosis/SUBSKILL.md` owns only parent ranking, dispatch, concurrency,
 completion checks, resume state, and aggregate summary.
 
+For `dedicated_fleet`, retain the complete discovered cluster set and ranking coverage. A fleet is
+complete only when every discovered cluster's ranking query succeeded; a successful empty result
+counts as covered, while a collection error does not. Rank candidates globally as distinct
+`(cluster_id, digest)` targets and never merge equal digests across clusters.
+
 When subagents are available:
 
 - dispatch exactly one digest to each subagent;
@@ -464,6 +479,9 @@ Set `batch_status: completed` only when every child in the effective user-author
 Any `queued`, `running`, or `retry_pending` child keeps the batch `running` or `paused`. Do not send
 a final finished message for `running`, `paused`, or `incomplete` batches.
 
+For `dedicated_fleet`, `completed` also requires the attempted and succeeded ranking cluster sets
+to equal the discovered Dedicated cluster set and `failed_clusters` to be empty.
+
 Preserve the original requested scope separately from the effective scope. If they differ, require
 a recorded user-authorized scope change with the previous count, new count, and reason. Preserve
 removed queue entries as `excluded_by_user`. Resource limits alone never authorize silent scope
@@ -483,7 +501,7 @@ focused report carries the exact digest.
 
 Keep the batch manifest compact. Each child record should contain only:
 
-- rank and digest;
+- rank, cluster ID, and digest;
 - diagnosis ID;
 - orchestration status;
 - recommended action and validation level when completed;
@@ -491,7 +509,8 @@ Keep the batch manifest compact. Each child record should contain only:
 - failed stage and concise blocker when failed.
 
 The batch record should also retain `batch_status`, `requested_top_n`, `effective_top_n`, explicit
-scope-change authorization when applicable, and derived child-status counts.
+scope-change authorization when applicable, derived child-status counts, and for fleet mode the
+discovered cluster IDs plus compact ranking coverage.
 
 If subagents are unavailable, record a sequential fallback and run each digest under the same
 complete focused workflow. This fallback does not permit skipped stages.
