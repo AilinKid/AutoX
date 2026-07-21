@@ -190,6 +190,14 @@ class ValidateBatchTest(unittest.TestCase):
             self.validate(manifest, invalid),
         )
 
+    def test_main_report_must_be_english_only(self) -> None:
+        manifest = self.manifest(["completed"])
+        invalid = self.summary(manifest).replace("test impact", "测试影响")
+        self.assertIn(
+            "batch main report must be English only",
+            self.validate(manifest, invalid),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

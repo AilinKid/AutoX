@@ -90,7 +90,10 @@ CREATE INDEX idx_a ON t (a);
 
 Plan before:
 ```text
-IndexLookUp with table-row fetch
+id                    estRows  actRows  task       access object               operator info
+IndexLookUp_10        1.00     1        root
+├─IndexRangeScan_8    1.00     1        cop[tikv] table:t, index:idx_old(a)   range decided by [eq(test.t.a, 1)]
+└─TableRowIDScan_9    1.00     1        cop[tikv] table:t                    keep order:false
 ```
 
 Plan after:
@@ -112,6 +115,7 @@ Why:
 The candidate targets the diagnosed runtime mechanism, or no plan-changing action is justified by the observed plan.
 
 Observed evidence:
+- SQL digest: `digest`
 The production plan performs a table-row fetch.
 
 Inference:
@@ -306,6 +310,38 @@ Validation and risks:
             self.validate(workspace),
         )
 
+    def test_report_requires_digest(self) -> None:
+        workspace = self.write_case("No optimizer action", "inferred", None)
+        report = workspace / "report" / "report.md"
+        text = report.read_text(encoding="utf-8").replace(
+            "- SQL digest: `digest`\n", "", 1
+        )
+        report.write_text(text, encoding="utf-8")
+        self.assertIn(
+            "Observed evidence must start with exactly one SQL digest bullet",
+            self.validate(workspace),
+        )
+
+    def test_report_digest_must_match_result(self) -> None:
+        workspace = self.write_case("No optimizer action", "inferred", None)
+        report = workspace / "report" / "report.md"
+        text = report.read_text(encoding="utf-8").replace(
+            "- SQL digest: `digest`", "- SQL digest: `different`", 1
+        )
+        report.write_text(text, encoding="utf-8")
+        self.assertIn("report SQL digest does not match result.json", self.validate(workspace))
+
+    def test_report_must_be_english_only(self) -> None:
+        workspace = self.write_case("No optimizer action", "inferred", None)
+        report = workspace / "report" / "report.md"
+        report.write_text(
+            report.read_text(encoding="utf-8").replace(
+                "The covering candidate targets that fetch.", "该候选索引避免回表。", 1
+            ),
+            encoding="utf-8",
+        )
+        self.assertIn("customer-facing report must be English only", self.validate(workspace))
+
     def test_no_action_conclusion_rejects_plan_fields(self) -> None:
         workspace = self.write_case("No optimizer action", "inferred", None)
         report = workspace / "report" / "report.md"
@@ -334,6 +370,39 @@ Validation and risks:
         report.write_text(text, encoding="utf-8")
         self.assertIn(
             "Plans Before & After must contain only complete Plan before and Plan after blocks",
+            self.validate(workspace),
+        )
+
+    def test_plan_before_rejects_decoded_plan_json(self) -> None:
+        workspace = self.write_case("Index first", "inferred", "passed")
+        report = workspace / "report" / "report.md"
+        text = report.read_text(encoding="utf-8")
+        text = re.sub(
+            r"(?<=Plan before:\n```text\n).*?(?=\n```\n\nPlan after:)",
+            '{"main":{"name":"IndexLookUp_10","children":[]}}',
+            text,
+            count=1,
+            flags=re.DOTALL,
+        )
+        report.write_text(text, encoding="utf-8")
+        self.assertIn(
+            "Plan before must be a rendered TiDB EXPLAIN-style plan, not JSON or prose",
+            self.validate(workspace),
+        )
+
+    def test_plan_before_rejects_prose_summary(self) -> None:
+        workspace = self.write_case("Index first", "inferred", "passed")
+        report = workspace / "report" / "report.md"
+        text = re.sub(
+            r"(?<=Plan before:\n```text\n).*?(?=\n```\n\nPlan after:)",
+            "IndexLookUp with table-row fetch",
+            report.read_text(encoding="utf-8"),
+            count=1,
+            flags=re.DOTALL,
+        )
+        report.write_text(text, encoding="utf-8")
+        self.assertIn(
+            "Plan before must be a rendered TiDB EXPLAIN-style plan, not JSON or prose",
             self.validate(workspace),
         )
 

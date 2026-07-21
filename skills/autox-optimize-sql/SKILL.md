@@ -174,12 +174,17 @@ Write it to the canonical artifact path `report/report.md`; do not choose anothe
 Plan-changing reports must include `## Conclusion`, `## Plans Before & After`, and `## Analysis`.
 Non-plan-changing reports must omit the plans section. Do not add extra top-level headings.
 
+Write every customer-facing focused report and batch main report in English only. Every focused
+report must include its exact SQL digest in `Observed evidence`; keep the batch main report at the
+contracted six columns and link to the focused report for digest details.
+
 Keep `Conclusion` compact. Plan-changing actions include only `Action` and concrete review-only
 SQL. Non-plan-changing actions include only `Action`. Put complete plans only in `Plans Before &
 After`, and put `Why`, evidence, inference, validation, and risks in `Analysis`.
 
 `Plan before` must use production runtime evidence when available, preferably the slow-log
-`decoded_plan`.
+`decoded_plan`, rendered as a TiDB EXPLAIN-style operator table/tree. Never embed raw decoded-plan
+JSON in a customer report.
 
 `Plan after` must use complete local `EXPLAIN FORMAT='verbose'` output when local validation
 was run.

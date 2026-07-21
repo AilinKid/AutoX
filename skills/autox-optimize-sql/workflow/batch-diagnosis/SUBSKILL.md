@@ -134,6 +134,7 @@ For each digest:
 - generate concrete candidates in diagnosis-classification;
 - run full-SQL local validation when matching version, schema, and stats are available;
 - produce one complete focused report;
+- write the focused report in English and include the exact digest under `Observed evidence`;
 - remove child-created hypothetical state and complete run-local artifact cleanup before marking
   the case complete; stop and clean up any local TiDB process, data directory, and source worktree
   created for that child diagnosis.
@@ -245,7 +246,7 @@ Before cleanup, the child self-audit must confirm all applicable checks:
 - `observed` retains production runtime evidence that directly supports the diagnosis and does not
   imply that an optimization was executed or verified in production;
 - `Plan before` contains the complete production runtime plan, preferably slow-log
-  `decoded_plan`;
+  `decoded_plan`, rendered as a TiDB EXPLAIN-style operator table/tree rather than raw JSON;
 - `Plan before` preserves `actRows`, execution info, process/total keys, cop details, memory, and
   disk when available;
 - `Plan after` contains complete local `EXPLAIN FORMAT='verbose'` output when validation ran, or
@@ -314,6 +315,9 @@ Use `batch-summary.md` as the only canonical batch main report. Do not create a 
 `final-report.md`, executive report, or alternate aggregate report with a different format. The
 main report is an index of focused results, not a substitute for them; do not copy full SQL, plans,
 candidate artifacts, detailed diagnoses, synthesized findings, or priority advice into it.
+
+Write the main report in English only. Keep the exact SQL digest in each linked focused report,
+not in the six-column main table.
 
 Use exactly this structure and heading order:
 

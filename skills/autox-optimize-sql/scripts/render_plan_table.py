@@ -43,7 +43,11 @@ def number_text(value: Any) -> str:
 def task_text(node: dict[str, Any]) -> str:
     task = one_line(node.get("taskType"))
     store = one_line(node.get("storeType"))
-    if task and store:
+    if task == "root":
+        return "root"
+    if task in {"cop", "mpp"} and store:
+        return f"{task}[{store}]"
+    if task and store and task != store:
         return f"{task}[{store}]"
     return task or store
 
@@ -59,6 +63,8 @@ def access_object_text(node: dict[str, Any]) -> str:
         db = scan.get("database")
         table = scan.get("table")
         name = ".".join(str(v) for v in (db, table) if v)
+        if name:
+            name = f"table:{name}"
         indexes = scan.get("indexes") or []
         if indexes:
             idx_parts = []
@@ -260,9 +266,9 @@ def render_fixed_width(rows: list[dict[str, str]], max_line_length: int, include
         ("estCost", "estCost", 14, "right"),
         ("actRows", "actRows", 8, "right"),
         ("task", "task", 9, "left"),
-        ("access", "access", 28, "left"),
-        ("exec", "exec", 28, "left"),
-        ("operator", "operator", 62, "left"),
+        ("access", "access object", 28, "left"),
+        ("exec", "execution info", 28, "left"),
+        ("operator", "operator info", 62, "left"),
         ("memory", "memory", 9, "right"),
         ("disk", "disk", 6, "right"),
     ]

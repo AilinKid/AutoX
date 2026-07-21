@@ -356,6 +356,8 @@ manifest should point to that artifact instead of copying all details.
 `workflow/final-report/SUBSKILL.md` must:
 
 - use only the contracted recommendation vocabulary;
+- write the customer-facing report in English only;
+- include the exact target SQL digest in the focused report's `Observed evidence`;
 - write the customer-facing report to `<workspace>/report/report.md`; other report filenames are
   invalid for new cases;
 - keep plan-changing `Conclusion` to `Action` and concrete review-only SQL, and keep
@@ -475,6 +477,9 @@ Use `batch-summary.md` as the only canonical batch main report. Its only top-lev
 the title are `Batch`, `Summary`, and `Cases`. The Cases table has exactly six columns in this
 order: `Rank`, `Cluster`, `Impact`, `Action`, `Validation`, `Report`. Do not expose internal
 candidate signals or IDs in the main report.
+
+Write the batch main report in English only. Keep digest out of its six-column table; every linked
+focused report carries the exact digest.
 
 Keep the batch manifest compact. Each child record should contain only:
 

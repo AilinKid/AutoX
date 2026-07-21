@@ -31,6 +31,9 @@ ALLOWED_ACTIONS = {
     "No optimizer action",
 }
 ALLOWED_VALIDATION_LEVELS = {"inferred", "observed", "plan_verified"}
+CJK_PATTERN = re.compile(
+    r"[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF\u3040-\u30FF\uAC00-\uD7AF]"
+)
 
 
 def load_manifest(path: Path, errors: list[str]) -> dict[str, Any]:
@@ -217,6 +220,8 @@ def validate_summary(workspace: Path, summary_path: str, effective: int,
     except OSError as exc:
         errors.append(f"completed batch summary_path is not readable: {exc}")
         return
+    if CJK_PATTERN.search(text):
+        errors.append("batch main report must be English only")
     if not text.startswith(f"{SUMMARY_TITLE}\n"):
         errors.append("batch main report has invalid title")
     headings = re.findall(r"^## (.+)$", text, re.MULTILINE)

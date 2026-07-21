@@ -131,6 +131,11 @@ Prefer, in order:
 Preserve all available operators, parent-child relationships, estimated rows or cost, `actRows`,
 execution info, memory, and disk. Do not summarize or truncate the plan.
 
+Render decoded-plan data as a TiDB EXPLAIN-style operator table/tree before placing it in the
+report. The rendered block must have an `id` header, recognizable TiDB operator IDs, task/storage
+columns, and preserved tree indentation. Use `../../scripts/render_plan_table.py` for decoded-plan
+JSON. Raw JSON may remain an internal evidence artifact, but it must never appear in `Plan before`.
+
 Never use as `Plan before`:
 
 - local `EXPLAIN` or local `EXPLAIN FORMAT='verbose'`;
@@ -138,11 +143,13 @@ Never use as `Plan before`:
 - a simplified query plan or plan sketch;
 - a plan missing runtime columns that exist in the source artifact;
 - an ASCII rendering with broken indentation or parent-child structure.
+- raw JSON or an unrendered decoded-plan object.
 
-If a rendered tree risks losing structure or long execution details, embed the raw production
-`decoded_plan`. If no production runtime plan exists, keep the fenced block and state the exact
-missing evidence inside it. A production-safe static `EXPLAIN` may be supporting evidence but must
-not replace an available runtime plan and must not be labeled `plan_verified`.
+If rendering risks losing structure or runtime columns, fix the renderer or return to evidence
+collection; do not publish raw JSON. A plan-changing report requires a rendered production prior
+plan. If it is unavailable, do not publish a plan-changing action. A production-safe static
+`EXPLAIN` may be supporting evidence but must not replace an available runtime plan and must not be
+labeled `plan_verified`.
 
 ## Plan After
 
@@ -212,6 +219,10 @@ Treat `Conclusion` as the default decision surface. A plan-changing action conta
 and concrete `Review-only SQL`. A non-plan-changing action contains only `Action`; its diagnostic
 reason belongs at the start of `Analysis`.
 
+Write the entire customer-facing report in English only. Preserve the exact SQL digest as the
+first bullet under `Observed evidence`, using the exact form shown in the templates below. Do not
+add a digest field to `Conclusion` or another top-level section.
+
 Keep complete plan trees only in `Plans Before & After`. Do not precede them with source, explain
 format, query time, plan digest, TiDB version, schema source, stats source, validation type, or
 estimated cost field lists. Put `Why`, observed evidence, inference, validation, risks, and missing
@@ -236,7 +247,7 @@ Review only. Not executed by AutoX.
 
 Plan before:
 ```text
-<complete production runtime prior plan, or exact missing-evidence reason>
+<complete production runtime prior plan rendered in TiDB EXPLAIN form>
 ```
 
 Plan after:
@@ -251,6 +262,7 @@ Why:
 <one short paragraph naming the dominant mechanism and why this is the first action>
 
 Observed evidence:
+- SQL digest: `<exact target digest>`
 <query-specific metrics, operators, tables, runtime facts, evidence source, and Clinic URL>
 
 Inference:
@@ -281,6 +293,7 @@ Why:
 <short diagnosis naming the runtime mechanism and why a plan change is not first>
 
 Observed evidence:
+- SQL digest: `<exact target digest>`
 <key observed facts and Clinic URL when available>
 
 Inference:
@@ -305,6 +318,7 @@ Why:
 <short diagnosis and reason for no optimizer action>
 
 Observed evidence:
+- SQL digest: `<exact target digest>`
 <key observed facts and Clinic URL when available>
 
 Inference:
@@ -361,13 +375,15 @@ Do not mark the report complete unless all applicable checks pass:
 - `Conclusion` contains only the fields allowed for the selected action;
 - every action has a concise diagnostic `Why` at the start of `Analysis`, including
   `No optimizer action`;
+- the report is English only and its `Observed evidence` contains the exact target SQL digest;
 - plan-changing actions have complete before/after plans only in `Plans Before & After`;
 - non-plan-changing actions omit `Plans Before & After` and review-only SQL;
 - the recommended action uses the contracted vocabulary;
 - the recommendation follows the diagnosed runtime mechanism;
 - time breakdown and the full `actRows` path were considered;
 - root cause names concrete operators and tables when evidence provides them;
-- a reported `Plan before` is complete production runtime evidence, not local EXPLAIN;
+- a reported `Plan before` is complete production runtime evidence rendered in TiDB EXPLAIN form,
+  not local EXPLAIN, raw JSON, or a prose placeholder;
 - a reported `Plan after` is complete full-SQL EXPLAIN evidence when validation ran;
 - a matching local environment was not skipped without an exact blocker;
 - concrete SQL passed all three validation booleans, or inferred Index DDL passed every advisory

@@ -25,6 +25,10 @@ PLAN_CHANGING_ACTIONS = {"Binding first", "Index first", "TiFlash / MPP first"}
 PLAN_REPORT_HEADINGS = ["Conclusion", "Plans Before & After", "Analysis"]
 NON_PLAN_REPORT_HEADINGS = ["Conclusion", "Analysis"]
 CANONICAL_REPORT_PATH = Path("report/report.md")
+CJK_PATTERN = re.compile(
+    r"[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF\u3040-\u30FF\uAC00-\uD7AF]"
+)
+TIDB_OPERATOR_PATTERN = re.compile(r"(?:^|[├└│─\s])(?:[A-Za-z][A-Za-z0-9]*)_\d+\b")
 
 
 def load_json(path: Path, errors: list[str]) -> dict[str, Any]:
@@ -101,6 +105,23 @@ def validate_conclusion(action: str, report_text: str, errors: list[str],
             errors.append("non-plan-changing Conclusion must contain only Action")
 
 
+def is_rendered_tidb_explain(plan: str) -> bool:
+    value = plan.strip()
+    try:
+        decoded = json.loads(value)
+    except json.JSONDecodeError:
+        decoded = None
+    if isinstance(decoded, (dict, list)):
+        return False
+    lines = [line for line in value.splitlines() if line.strip()]
+    if len(lines) < 2:
+        return False
+    header = lines[0].lower()
+    if not re.search(r"\bid\b", header) or not re.search(r"\btask\b", header):
+        return False
+    return any(TIDB_OPERATOR_PATTERN.search(line) for line in lines[1:])
+
+
 def validate_plans(action: str, report_text: str, errors: list[str]) -> None:
     if action not in PLAN_CHANGING_ACTIONS:
         return
@@ -110,13 +131,19 @@ def validate_plans(action: str, report_text: str, errors: list[str]) -> None:
         r"Plan after:\s*\n```text[ \t]*\n(.+?)\n```\Z",
         re.DOTALL,
     )
-    if not pattern.fullmatch(plans):
+    match = pattern.fullmatch(plans)
+    if not match:
         errors.append(
             "Plans Before & After must contain only complete Plan before and Plan after blocks"
         )
+        return
+    if not is_rendered_tidb_explain(match.group(1)):
+        errors.append(
+            "Plan before must be a rendered TiDB EXPLAIN-style plan, not JSON or prose"
+        )
 
 
-def validate_analysis(report_text: str, errors: list[str]) -> None:
+def validate_analysis(report_text: str, expected_digest: str, errors: list[str]) -> None:
     analysis = report_section(report_text, "Analysis")
     pattern = re.compile(
         r"\AWhy:\s*\n(.+?)\n+"
@@ -125,10 +152,18 @@ def validate_analysis(report_text: str, errors: list[str]) -> None:
         r"Validation and risks:\s*\n(.+)\Z",
         re.DOTALL,
     )
-    if not pattern.fullmatch(analysis):
+    match = pattern.fullmatch(analysis)
+    if not match:
         errors.append(
             "Analysis must contain only Why, Observed evidence, Inference, and Validation and risks"
         )
+        return
+    observed = match.group(2).strip()
+    digest_matches = re.findall(r"^- SQL digest: `([^`\n]+)`\s*$", observed, re.MULTILINE)
+    if len(digest_matches) != 1 or not observed.startswith("- SQL digest: `"):
+        errors.append("Observed evidence must start with exactly one SQL digest bullet")
+    elif digest_matches[0] != expected_digest:
+        errors.append("report SQL digest does not match result.json")
 
 
 def validate_validation_evidence(action: str, result: dict[str, Any], errors: list[str],
@@ -241,6 +276,8 @@ def validate_report(workspace: Path, result: dict[str, Any], errors: list[str],
     except OSError as exc:
         errors.append(f"report_path is not readable: {exc}")
         return ""
+    if CJK_PATTERN.search(text):
+        errors.append("customer-facing report must be English only")
     headings = re.findall(r"^## (.+)$", text, re.MULTILINE)
     action = result.get("recommended_action")
     expected_headings = (
@@ -342,7 +379,7 @@ def validate_completed(workspace: Path, result: dict[str, Any], report_text: str
     )
     if not allow_legacy_report_format:
         validate_plans(str(action or ""), report_text, errors)
-        validate_analysis(report_text, errors)
+        validate_analysis(report_text, str(result.get("digest") or ""), errors)
     markers = ["Validation level:"]
     if not allow_legacy_validation_evidence:
         markers.extend(("Plan validation status:", "Runtime evidence status:"))
