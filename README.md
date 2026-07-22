@@ -124,37 +124,33 @@ lowered only to fit this README; generated report artifacts use the canonical he
 paths defined by the Skill. The `Report` column is illustrative here; generated batch artifacts
 link every row to its own focused report.
 
-### AutoX Slow SQL Batch Report
-
-#### Batch
-
-- Status: `completed`
-- Scope: global Top 10 across all accessible active Dedicated clusters
-- Progress: `10/10`
-- Time range: `2026-07-21 16:00:00 ~ 2026-07-22 16:00:00 Asia/Shanghai`
-- Ranking: cluster ID + SQL digest, ordered by aggregate slow-query latency
-- Coverage: `8/8` active Dedicated clusters ranked successfully; 2 returned no eligible slow
-  `SELECT` statements
-- Safety: `Production read-only; no binding, index, configuration, or DDL changes were applied.`
-
-#### Summary
-
-- Impact: 49,180 slow executions; 138.3 aggregate slow-query hours; Top 10 account for 73.1%
-- Actions: Binding first=2, Index first=3, Investigate non-optimizer bottleneck=3, No optimizer
-  action=2
-- Validation levels: inferred=1, observed=4, plan_verified=5
-
-#### Cases
-
-| Rank | Cluster | Impact | Action | Validation | Report |
-|---:|---|---:|---|---|---|
-| 1 | demo-orders-a | 42.8h / 12,840 exec | Index first | plan_verified | report |
-| 2 | demo-payments-b | 31.4h / 8,520 exec | Investigate non-optimizer bottleneck | observed | report |
-| 3 | demo-analytics-a | 18.6h / 740 exec | Binding first | plan_verified | report |
-| 4 | demo-orders-a | 12.1h / 4,920 exec | No optimizer action | observed | report |
-| 5 | demo-catalog-b | 8.7h / 2,310 exec | Index first | inferred | report |
-| 6 | demo-payments-b | 7.9h / 6,080 exec | Investigate non-optimizer bottleneck | observed | report |
-| 7 | demo-search-a | 5.5h / 1,950 exec | Binding first | plan_verified | report |
-| 8 | demo-ledger-a | 4.8h / 1,240 exec | No optimizer action | plan_verified | report |
-| 9 | demo-events-b | 3.6h / 9,820 exec | Investigate non-optimizer bottleneck | observed | report |
-| 10 | demo-profile-a | 2.9h / 760 exec | Index first | plan_verified | report |
+> ### AutoX Slow SQL Batch Report
+> #### Batch
+> - Status: `completed`
+> - Scope: global Top 10 across all accessible active Dedicated clusters
+> - Progress: `10/10`
+> - Time range: `2026-07-21 16:00:00 ~ 2026-07-22 16:00:00 Asia/Shanghai`
+> - Ranking: cluster ID + SQL digest, ordered by aggregate slow-query latency
+> - Coverage: `8/8` active Dedicated clusters ranked successfully; 2 returned no eligible slow `SELECT` statements
+> - Safety: `Production read-only; no binding, index, configuration, or DDL changes were applied.`
+> 
+> #### Summary
+> 
+> - Impact: 49,180 slow executions; 138.3 aggregate slow-query hours; Top 10 account for 73.1%
+> - Actions: Binding first=2, Index first=3, Investigate non-optimizer bottleneck=3, No optimizer action=2
+> - Validation levels: inferred=1, observed=4, plan_verified=5
+> 
+> #### Cases
+> 
+> | Rank | Cluster | Impact | Action | Validation | Report |
+> |---:|---|---:|---|---|---|
+> | 1 | demo-orders-a | 42.8h / 12,840 exec | Index first | plan_verified | report |
+> | 2 | demo-payments-b | 31.4h / 8,520 exec | Investigate non-optimizer bottleneck | observed | report |
+> | 3 | demo-analytics-a | 18.6h / 740 exec | Binding first | plan_verified | report |
+> | 4 | demo-orders-a | 12.1h / 4,920 exec | No optimizer action | observed | report |
+> | 5 | demo-catalog-b | 8.7h / 2,310 exec | Index first | inferred | report |
+> | 6 | demo-payments-b | 7.9h / 6,080 exec | Investigate non-optimizer bottleneck | observed | report |
+> | 7 | demo-search-a | 5.5h / 1,950 exec | Binding first | plan_verified | report |
+> | 8 | demo-ledger-a | 4.8h / 1,240 exec | No optimizer action | plan_verified | report |
+> | 9 | demo-events-b | 3.6h / 9,820 exec | Investigate non-optimizer bottleneck | observed | report |
+> | 10 | demo-profile-a | 2.9h / 760 exec | Index first | plan_verified | report |
