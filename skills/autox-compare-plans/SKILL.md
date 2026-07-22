@@ -37,7 +37,16 @@ Read `../autox-optimize-sql/references/case-contract.md`.
    - runtime metrics only from production evidence or approved local
      `EXPLAIN ANALYZE`: per-execution latency, actRows, processed/total keys,
      scan rows per returned row, loops, memory, disk spill, and errors.
-7. Rank a candidate higher only when the mechanism is explicit and evidence is
+7. Treat an identical operator tree as inconclusive, not as proof that there is no improvement.
+   A candidate has a material semantic delta when it addresses the diagnosed mechanism through a
+   changed access path/object/range, additional access conditions, fewer residual filters or table
+   lookups, better partition pruning, predicate/TopN/Agg pushdown, ordering, join semantics,
+   task/store placement, or data movement. Operator-ID, plan-digest, `estRows`, or estimated-cost
+   changes alone are not material. Record `material`, `addresses_diagnosed_mechanism`, concrete
+   `changed_fields`, concise before/after values, and a summary. Reject a candidate with no material
+   semantic delta. The same tree may pass when, for example, `IndexRangeScan` gains useful access
+   conditions or a narrower range.
+8. Rank a candidate higher only when the mechanism is explicit and evidence is
    adequate. Strong static signals include simple point plans, narrower range
    scans over full scans, fewer table lookups, fewer processed keys per returned
    row, earlier predicate/TopN/Agg pushdown, better join driver/build side,
@@ -45,19 +54,19 @@ Read `../autox-optimize-sql/references/case-contract.md`.
    exchanges. Penalize pseudo or partial stats, lookup amplification, Cartesian
    joins, lost partition pruning, forced unsupported hints, wider write/storage
    cost, and high rollback complexity.
-8. For `EXPLAIN EXPLORE` output, distinguish historical candidates from newly
+9. For `EXPLAIN EXPLORE` output, distinguish historical candidates from newly
    generated candidates. Use `avg_latency`, `exec_times`, scan-row ratios, and
    built-in `recommend` only when their provenance is recorded and `exec_times`
    is nonzero or the run was explicitly analyzed. Otherwise treat them as
    advisory and rank by plan-shape evidence plus required validation.
-9. Separate estimated benefit, measured local benefit, production confidence,
+10. Separate estimated benefit, measured local benefit, production confidence,
    compatibility, write/storage cost, blast radius, and rollback complexity.
    Treat lower estimated cost, lower `estRows`, or a different digest as
    insufficient evidence by itself.
-10. Rank candidates and document rejected candidates with reasons. Mark a
+11. Rank candidates and document rejected candidates with reasons. Mark a
    recommendation `validated` only when baseline reproduction and candidate
    validation are both adequate; otherwise mark it `advisory` or `unvalidated`.
-11. Return the ranked comparison, selected recommendation, rejected candidates,
+12. Return the ranked comparison, selected recommendation, rejected candidates,
     and evidence references. If a run-local workspace exists, save them under
     `decision/` and update its optional manifest or audit log. Do not require
     persisted workflow state.

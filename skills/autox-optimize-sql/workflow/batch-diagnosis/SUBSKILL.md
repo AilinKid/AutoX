@@ -63,10 +63,12 @@ For one cluster:
 1. Resolve the exact cluster ID and collect cluster metadata.
 2. Resolve the business and UTC time range, including Slow Query and TopSQL partitions.
 3. Run digest-level Slow Query aggregation without selecting a single digest.
-4. Rank unique digests by total slow-query latency unless the user requested another ranking.
-5. Preserve execution count, total/average/max latency, representative SQL, plan-digest count,
+4. Exclude write DML, transaction control, DDL, administrative statements, and locking
+   `SELECT ... FOR UPDATE`; AutoX v0 ranks read-only `SELECT` statements only.
+5. Rank unique digests by total slow-query latency unless the user requested another ranking.
+6. Preserve execution count, total/average/max latency, representative SQL, plan-digest count,
    processed keys, total keys, memory, and disk when available.
-6. Select the requested number of unique digests after ranking. Multiple plan variants for one
+7. Select the requested number of unique digests after ranking. Multiple plan variants for one
    digest belong to the same focused case.
 
 For generic fleet mode:
@@ -76,10 +78,12 @@ For generic fleet mode:
 2. Record the complete discovered cluster set before Slow Query collection.
 3. Run digest-level Slow Query aggregation for every discovered cluster over the same exact
    rolling 24-hour window.
-4. Preserve per-cluster ranking status as succeeded, empty, or failed with the exact blocker.
-5. Merge candidates as distinct `(cluster_id, digest)` targets and rank them globally by total
+4. Exclude write DML, transaction control, DDL, administrative statements, and locking
+   `SELECT ... FOR UPDATE`; AutoX v0 ranks read-only `SELECT` statements only.
+5. Preserve per-cluster ranking status as succeeded, empty, or failed with the exact blocker.
+6. Merge candidates as distinct `(cluster_id, digest)` targets and rank them globally by total
    slow-query latency. Do not combine the same digest across clusters.
-6. Select up to 10 global targets unless the user supplied another top-N.
+7. Select up to 10 global targets unless the user supplied another top-N.
 
 Use `../../scripts/collect_fleet_slow_sql.py` for fleet discovery and ranking. A completed fleet
 must have successful ranking coverage for every discovered Dedicated cluster. Empty Slow Query

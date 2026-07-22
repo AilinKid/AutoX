@@ -24,6 +24,27 @@ ALLOWED_RUNTIME_EVIDENCE_STATUSES = {"not_observed", "observed", "failed"}
 PLAN_CHANGING_ACTIONS = {"Binding first", "Index first", "TiFlash / MPP first"}
 PLAN_REPORT_HEADINGS = ["Conclusion", "Plans Before & After", "Analysis"]
 NON_PLAN_REPORT_HEADINGS = ["Conclusion", "Analysis"]
+MATERIAL_SEMANTIC_FIELDS = {
+    "operator_tree",
+    "access_path",
+    "access_object",
+    "access_range",
+    "access_conditions",
+    "residual_filters",
+    "covering_index",
+    "table_lookup",
+    "partition_pruning",
+    "predicate_pushdown",
+    "aggregation_pushdown",
+    "topn_pushdown",
+    "sort_elimination",
+    "ordering",
+    "join_order",
+    "join_algorithm",
+    "join_build_probe",
+    "task_store",
+    "data_movement",
+}
 CANONICAL_REPORT_PATH = Path("report/report.md")
 CJK_PATTERN = re.compile(
     r"[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF\u3040-\u30FF\uAC00-\uD7AF]"
@@ -223,6 +244,47 @@ def validate_validation_evidence(action: str, result: dict[str, Any], errors: li
                     errors.append("plan-changing plan_validation reproduction_kind must be candidate")
                 if plan.get("candidate_plan_captured") is not True:
                     errors.append("plan_validation candidate_plan_captured must be true")
+                semantic_delta = plan.get("semantic_delta")
+                if not isinstance(semantic_delta, dict):
+                    errors.append("plan-changing plan_validation missing semantic_delta")
+                else:
+                    require_keys(
+                        semantic_delta,
+                        (
+                            "material",
+                            "addresses_diagnosed_mechanism",
+                            "changed_fields",
+                            "before",
+                            "after",
+                            "summary",
+                        ),
+                        "plan_validation semantic_delta",
+                        errors,
+                    )
+                    if semantic_delta.get("material") is not True:
+                        errors.append("plan_validation semantic_delta material must be true")
+                    if semantic_delta.get("addresses_diagnosed_mechanism") is not True:
+                        errors.append(
+                            "plan_validation semantic_delta must address the diagnosed mechanism"
+                        )
+                    changed_fields = semantic_delta.get("changed_fields")
+                    if not isinstance(changed_fields, list) or not changed_fields or not all(
+                        isinstance(item, str) and item for item in changed_fields
+                    ):
+                        errors.append(
+                            "plan_validation semantic_delta changed_fields must be non-empty strings"
+                        )
+                    elif not MATERIAL_SEMANTIC_FIELDS.intersection(changed_fields):
+                        errors.append(
+                            "plan_validation semantic_delta lacks a material plan field"
+                        )
+                    for key in ("before", "after", "summary"):
+                        if not isinstance(semantic_delta.get(key), str) or not semantic_delta.get(
+                            key
+                        ).strip():
+                            errors.append(
+                                f"plan_validation semantic_delta {key} must be non-empty"
+                            )
             else:
                 if plan.get("reproduction_kind") != "baseline_recovered":
                     errors.append(

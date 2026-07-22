@@ -60,6 +60,18 @@ class ValidateCaseTest(unittest.TestCase):
                 "optimizer_selected_expected_path": True,
                 "plan_shape_matches_diagnosis": True,
             }
+            if action in VALIDATE_CASE.PLAN_CHANGING_ACTIONS:
+                result["plan_validation"]["semantic_delta"] = {
+                    "material": True,
+                    "addresses_diagnosed_mechanism": True,
+                    "changed_fields": ["access_conditions", "access_range"],
+                    "before": "range: decided by [eq(test.t.a, 1)]",
+                    "after": "range: [1 2,1 2], access:eq(a,1),eq(b,2)",
+                    "summary": (
+                        "The same operator tree uses an additional index access condition "
+                        "and a narrower range."
+                    ),
+                }
         if level == "observed":
             result["runtime_observation"] = {
                 "observation_source": "production_runtime",
@@ -84,7 +96,10 @@ CREATE INDEX idx_a ON t (a);
             candidate_plan = (
                 "Covering IndexReader; candidate plan was not reproduced"
                 if level in {"inferred", "observed"}
-                else "Covering IndexReader using idx_a"
+                else """id                    estRows  task       access object               operator info
+IndexLookUp_20        1.00     root
+├─IndexRangeScan_18   1.00     cop[tikv] table:t, index:idx_a(a,b) range:[1 2,1 2], access:eq(test.t.a, 1), eq(test.t.b, 2)
+└─TableRowIDScan_19   1.00     cop[tikv] table:t                    keep order:false"""
             )
             plans = f"""\n\n## Plans Before & After
 
@@ -218,6 +233,35 @@ Validation and risks:
             "plan_validation source must be local_tidb",
             self.validate(workspace),
         )
+
+    def test_plan_verified_requires_material_semantic_delta(self) -> None:
+        workspace = self.write_case("Binding first", "plan_verified", "passed")
+        result_path = workspace / "result.json"
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+        result["plan_validation"].pop("semantic_delta")
+        result_path.write_text(json.dumps(result), encoding="utf-8")
+        self.assertIn(
+            "plan-changing plan_validation missing semantic_delta",
+            self.validate(workspace),
+        )
+
+    def test_estimates_alone_are_not_a_material_semantic_delta(self) -> None:
+        workspace = self.write_case("Binding first", "plan_verified", "passed")
+        result_path = workspace / "result.json"
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+        result["plan_validation"]["semantic_delta"]["changed_fields"] = [
+            "estimated_rows",
+            "estimated_cost",
+        ]
+        result_path.write_text(json.dumps(result), encoding="utf-8")
+        self.assertIn(
+            "plan_validation semantic_delta lacks a material plan field",
+            self.validate(workspace),
+        )
+
+    def test_same_operator_tree_with_better_access_conditions_is_valid(self) -> None:
+        workspace = self.write_case("Binding first", "plan_verified", "passed")
+        self.assertEqual([], self.validate(workspace))
 
     def test_plan_verified_accepts_natural_baseline_recovery(self) -> None:
         workspace = self.write_case(

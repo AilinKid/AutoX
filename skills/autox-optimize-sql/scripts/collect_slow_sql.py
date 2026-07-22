@@ -22,8 +22,11 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 DEFAULT_TIMEZONE = "Asia/Shanghai"
 DEFAULT_LAST_HOURS = 24.0
 DEFAULT_LIMIT = 5
+MIN_CANDIDATE_SCAN_LIMIT = 200
 CLUSTER_ID_RE = re.compile(r"^(?:\d+|bran-[A-Za-z0-9_-]+)$")
 DIGEST_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+MAIN_STATEMENT_KEYWORDS = {"select", "insert", "update", "delete", "replace", "load"}
+WRITE_STATEMENT_KEYWORDS = MAIN_STATEMENT_KEYWORDS - {"select"}
 
 
 class CollectionError(RuntimeError):
@@ -223,6 +226,91 @@ def numeric_expression(column: str) -> str:
     return f"CAST(NULLIF({column}, '') AS DOUBLE)"
 
 
+def top_level_words(sql: Any) -> list[str]:
+    """Return unquoted words outside parentheses and comments."""
+    if not isinstance(sql, str):
+        return []
+    words: list[str] = []
+    depth = 0
+    index = 0
+    while index < len(sql):
+        char = sql[index]
+        following = sql[index + 1] if index + 1 < len(sql) else ""
+        if char == "-" and following == "-":
+            index = sql.find("\n", index + 2)
+            if index == -1:
+                break
+            continue
+        if char == "#":
+            index = sql.find("\n", index + 1)
+            if index == -1:
+                break
+            continue
+        if char == "/" and following == "*":
+            end = sql.find("*/", index + 2)
+            if end == -1:
+                break
+            index = end + 2
+            continue
+        if char in {"'", '"', "`"}:
+            quote = char
+            index += 1
+            while index < len(sql):
+                if sql[index] == "\\":
+                    index += 2
+                    continue
+                if sql[index] == quote:
+                    if index + 1 < len(sql) and sql[index + 1] == quote:
+                        index += 2
+                        continue
+                    index += 1
+                    break
+                index += 1
+            continue
+        if char == "(":
+            depth += 1
+            index += 1
+            continue
+        if char == ")":
+            depth = max(0, depth - 1)
+            index += 1
+            continue
+        if char.isalpha() or char == "_":
+            end = index + 1
+            while end < len(sql) and (sql[end].isalnum() or sql[end] in {"_", "$"}):
+                end += 1
+            if depth == 0:
+                words.append(sql[index:end].lower())
+            index = end
+            continue
+        index += 1
+    return words
+
+
+def statement_kind(sql: Any) -> str:
+    words = top_level_words(sql)
+    if not words:
+        return "unknown"
+    if words[0] == "with":
+        return next((word for word in words[1:] if word in MAIN_STATEMENT_KEYWORDS), "unknown")
+    return words[0]
+
+
+def is_read_only_query(sql: Any) -> bool:
+    words = top_level_words(sql)
+    if not words or words[0] not in {"select", "with"}:
+        return False
+    main_index = 0 if words[0] == "select" else next(
+        (index for index, word in enumerate(words[1:], start=1)
+         if word in MAIN_STATEMENT_KEYWORDS),
+        None,
+    )
+    if main_index is None or words[main_index] != "select":
+        return False
+    # Exclude SELECT ... FOR UPDATE and any multi-statement write suffix.
+    return not any(word in WRITE_STATEMENT_KEYWORDS for word in words[main_index + 1 :])
+
+
 def exact_cluster(api: Any, cluster_id: str) -> dict[str, Any]:
     response = api._get(  # Reuse clinic-api authentication and HTTP handling.
         "/clinic/api/v1/dashboard/clusters",
@@ -282,6 +370,7 @@ def collect_candidates(
         )
         return []
 
+    scan_limit = max(MIN_CANDIDATE_SCAN_LIMIT, args.limit * 20)
     sql = f"""
 SELECT
   digest,
@@ -296,11 +385,24 @@ WHERE date IN ({partition_list(window["slow_query_partitions"])})
   AND time < {window["utc_end_unix"]}
 GROUP BY digest
 ORDER BY total_query_time DESC
-LIMIT {args.limit}
+LIMIT {scan_limit}
 """
-    return query(
+    rows = query(
         api, args.cluster_id, sql, errors, "digest_candidates", timeout=120
     )
+    candidates = [row for row in rows if is_read_only_query(row.get("sample_sql"))]
+    if len(rows) >= scan_limit and len(candidates) < args.limit:
+        errors.append(
+            {
+                "area": "digest_candidates.statement_filter",
+                "error": (
+                    "read-only candidate ranking exhausted the scan limit before "
+                    f"finding {args.limit} eligible SELECT digests"
+                ),
+            }
+        )
+        return []
+    return candidates[: args.limit]
 
 
 def collect_digest(
@@ -361,6 +463,28 @@ WHERE {slow_filter}
 GROUP BY digest
 """
     summary = query(api, args.cluster_id, summary_sql, errors, "slow_query.summary")
+    if summary and not is_read_only_query(summary[0].get("sample_sql")):
+        errors.append(
+            {
+                "area": "target.statement_type",
+                "error": (
+                    "AutoX v0 diagnoses read-only SELECT statements only; "
+                    f"excluded {statement_kind(summary[0].get('sample_sql'))} statement"
+                ),
+            }
+        )
+        return (
+            {
+                "summary": summary,
+                "representative_executions": {},
+                "plan_variants": [],
+            },
+            {
+                "available": False,
+                "summary": [],
+                "plan_variants": [],
+            },
+        )
 
     requested_detail = [
         "time",
@@ -662,7 +786,10 @@ def main() -> int:
             payload["topsql"] = topsql
             summaries = slow_query.get("summary") or []
             if summaries:
-                payload["target"]["sample_sql"] = summaries[0].get("sample_sql")
+                sample_sql = summaries[0].get("sample_sql")
+                payload["target"]["sample_sql"] = sample_sql
+                payload["target"]["statement_type"] = statement_kind(sample_sql)
+                payload["target"]["read_only_eligible"] = is_read_only_query(sample_sql)
         else:
             payload["slow_query"] = {
                 "digest_candidates": collect_candidates(

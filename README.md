@@ -11,6 +11,10 @@ AutoX is read-only for the target cluster. It does not create production
 bindings, change production indexes, modify a cluster, or verify production
 outcomes.
 
+AutoX v0 diagnoses read-only `SELECT` statements only. Automatic ranking
+excludes write DML, transaction control, DDL, administrative statements, and
+locking `SELECT ... FOR UPDATE`.
+
 ## Workflow
 
 ```text

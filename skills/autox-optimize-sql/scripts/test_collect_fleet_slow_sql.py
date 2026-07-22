@@ -66,6 +66,7 @@ class FakeClinicAPI:
         del timeout
         rows = {
             "1": [
+                ["e" * 64, "insert into t values (1)", 1, 100, 100, 100],
                 ["a" * 64, "select 1", 1, 30, 30, 30],
                 ["b" * 64, "select 2", 1, 10, 10, 10],
             ],

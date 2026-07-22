@@ -117,6 +117,9 @@ candidate generation, and first-pass validation should be automated.
 - AutoX v0 does not perform full workload replay or full data copy.
 - AutoX v0 does not optimize every SQL in the cluster. It prioritizes high
   impact candidates based on available evidence.
+- AutoX v0 does not diagnose write DML, transaction control, DDL, administrative
+  statements, or locking `SELECT ... FOR UPDATE`; automatic ranking selects
+  read-only `SELECT` statements only.
 
 ## Target Users
 
@@ -347,6 +350,13 @@ The comparison should include:
 - latency and CPU when available;
 - parameter shape, time-window, or data-distribution differences when visible.
 
+An identical operator tree does not prove that two plans are equivalent. AutoX
+must compare semantic fields such as access object and range, access conditions,
+residual filters, lookup behavior, pruning, pushdown, ordering, join semantics,
+task/store placement, and data movement. A same-tree candidate may be materially
+better when these fields improve. Operator IDs, plan digests, estimates, or cost
+changes alone are insufficient.
+
 #### Phase 3: Bottleneck Diagnosis
 
 If no clearly better historical plan exists, AutoX diagnoses the current slow
@@ -458,6 +468,10 @@ production-verification level.
 
 Local static `EXPLAIN` is not runtime proof. Reports must not claim latency
 improvement unless runtime evidence exists.
+
+A plan-changing `plan_verified` result also requires a material semantic delta
+that addresses the diagnosed mechanism and records concrete changed fields plus
+before/after values. Reject a candidate when no such delta exists.
 
 Local TiDB is optional. When it is unavailable, an Index candidate may still be
 recommended at `inferred` level only after schema, candidate columns, existing

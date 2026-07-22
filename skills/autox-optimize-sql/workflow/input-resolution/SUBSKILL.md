@@ -39,6 +39,11 @@ Optional:
 - prepared local TiDB connection;
 - existing TiDB source checkout or binary.
 
+AutoX v0 supports read-only `SELECT` statements only. Exclude write DML, transaction control, DDL,
+administrative statements, and `SELECT ... FOR UPDATE` from automatic ranking. If an explicit SQL
+or digest resolves to an ineligible statement, return an unsupported-statement result and stop
+before diagnosis or candidate generation.
+
 When the user provides a `cluster_id`, treat it as sufficient authorization to run the
 read-only diagnostic workflow.
 

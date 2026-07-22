@@ -1,6 +1,6 @@
 ---
 name: autox-optimize-sql
-description: Diagnose slow SQL in TiDB Cloud and produce evidence-backed execution recommendations such as Binding, Index, TiFlash/MPP, non-optimizer investigation, or no optimizer action. Use when the user provides a cluster_id, SQL digest, slow SQL text, or time range, or makes a generic cluster-diagnosis request such as "帮我看下集群诊断". Generic requests default to the global top 10 slow-query digests across all accessible active Dedicated clusters in the rolling last 24 hours. Query cluster metadata, Slow Query, TopSQL, schema, and statistics through the clinic-api skill. This skill is read-only and must not execute bindings, create indexes, or modify production.
+description: Diagnose slow SQL in TiDB Cloud and produce evidence-backed execution recommendations such as Binding, Index, TiFlash/MPP, non-optimizer investigation, or no optimizer action. Use when the user provides a cluster_id, SQL digest, slow SQL text, or time range, or makes a generic cluster-diagnosis request such as "帮我看下集群诊断". Generic requests default to the global top 10 read-only SELECT digests across all accessible active Dedicated clusters in the rolling last 24 hours; write, transaction, DDL, and administrative statements are excluded. Query cluster metadata, Slow Query, TopSQL, schema, and statistics through the clinic-api skill. This skill is read-only and must not execute bindings, create indexes, or modify production.
 ---
 
 # AutoX Slow SQL Optimization
@@ -84,6 +84,11 @@ override these defaults.
 
 Every fleet child must still resolve one exact `cluster_id`; fleet mode does not weaken focused
 case identity, evidence, isolation, validation, or completion gates.
+
+AutoX v0 diagnoses read-only `SELECT` statements only. Exclude write DML, transaction control,
+DDL, administrative statements, and `SELECT ... FOR UPDATE` from automatic ranking. If the user
+explicitly targets an ineligible statement, report that it is unsupported and do not generate an
+optimizer recommendation.
 
 For every diagnosis:
 
@@ -175,6 +180,12 @@ when Cloud-side evidence was available to AutoX. A local TiDB preparation failur
 validation level at `inferred`; it does not by itself demote an Index candidate. Use `No optimizer
 action` or `Investigate non-optimizer bottleneck` only when the collected evidence and applicable
 advisory gate do not justify an optimizer action.
+
+For a plan-changing `plan_verified` recommendation, require a material semantic delta that
+addresses the diagnosed mechanism. Do not compare only operator names or tree shape: identical
+trees may still improve through access conditions, ranges, residual filters, lookup behavior,
+pruning, pushdown, ordering, join semantics, or task/store placement. Operator-ID, plan-digest,
+`estRows`, or estimated-cost changes alone are insufficient.
 
 ## Final Report
 

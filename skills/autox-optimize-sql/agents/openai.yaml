@@ -1,4 +1,4 @@
 interface:
   display_name: "AutoX Optimize SQL"
   short_description: "Diagnose TiDB Cloud slow SQL and produce reviewed actions"
-  default_prompt: "Use $autox-optimize-sql to diagnose TiDB Cloud slow SQL; for a generic cluster review, scan the global top 10 across all active Dedicated clusters over the last 24 hours."
+  default_prompt: "Use $autox-optimize-sql to diagnose read-only TiDB Cloud slow SELECT statements; for a generic cluster review, scan the global top 10 across all active Dedicated clusters over the last 24 hours."

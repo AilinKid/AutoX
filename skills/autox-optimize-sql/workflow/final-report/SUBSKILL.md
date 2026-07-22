@@ -62,6 +62,11 @@ Apply these rules in order:
    - `syntax_accepted`;
    - `optimizer_selected_expected_path`;
    - `plan_shape_matches_diagnosis`.
+   A plan-changing candidate must also have a material semantic delta that addresses the diagnosed
+   mechanism and records concrete changed fields plus before/after values. Identical operator trees
+   are allowed when access conditions, ranges, residual filters, lookup behavior, pruning,
+   pushdown, ordering, join semantics, or task/store placement materially improves. Operator IDs,
+   plan digests, estimates, or cost changes alone do not pass this gate.
 4. Map a passing candidate to the action represented by its mechanism:
    - a binding or hinted-plan candidate -> `Binding first`;
    - a new-index candidate selected naturally after hypothetical creation -> `Index first`;
@@ -95,6 +100,7 @@ Include concrete Binding or TiFlash/MPP SQL only when all of the following are t
 - validation accepted the syntax on the target or a matching TiDB version;
 - the optimizer selected the expected path, join, or engine;
 - the plan shape matches the diagnosed mechanism;
+- the comparison records a material semantic delta with concrete before/after values;
 - the candidate plan is complete and available for review.
 
 An inferred Index candidate may include concrete `CREATE INDEX` DDL when every advisory check is
@@ -192,6 +198,11 @@ concrete operator and table. Ground the analysis in this query's evidence:
 
 Explain why the selected action targets the dominant runtime mechanism. Do not fill the report
 with generic optimizer advice or restate the workflow.
+
+For a plan-changing action, name the material semantic delta in `Why` or `Inference`. When the
+operator tree is unchanged, identify the improved access conditions, range, residual filters,
+lookup behavior, pruning, pushdown, ordering, join semantics, task/store placement, or data
+movement. Do not present operator-ID, `estRows`, or estimated-cost changes alone as improvement.
 
 Local static `EXPLAIN` proves plan shape only. Without runtime validation, say `expected to
 reduce`, `plan shape indicates`, or `requires production runtime validation`. Never claim measured

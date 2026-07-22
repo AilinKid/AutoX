@@ -80,8 +80,13 @@ python3 scripts/collect_slow_sql.py \
 ```
 
 With only `cluster_id`, the script returns ranked digest candidates. Add
-`--include-lock-details` only when base evidence suggests transaction retry, `FOR UPDATE`,
-lock wait, or lock-related runtime plan operators.
+`--include-lock-details` only when an eligible read-only query's base evidence suggests transaction
+retry, lock wait, or lock-related runtime plan operators.
+
+The automatic ranking output contains only read-only `SELECT` statements. The collector removes
+write DML, transaction control, DDL, administrative statements, and locking `SELECT ... FOR
+UPDATE`. Treat an explicit target's `target.statement_type` or statement eligibility error as a
+hard stop; do not continue to diagnosis.
 
 The script reads Clinic credentials from `.env` by default. Use `--env-file <path>` to select
 another file. If `clinic-api` is not installed in a standard Skill location, pass

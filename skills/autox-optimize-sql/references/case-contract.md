@@ -36,6 +36,11 @@ top-10 cap unless the user overrides the corresponding value. Fleet discovery mu
 accessible active Dedicated clusters before ranking. Every focused child still requires an exact
 `cluster_id`.
 
+AutoX v0 selects read-only `SELECT` statements only. Automatic ranking must exclude write DML,
+transaction control, DDL, administrative statements, and locking `SELECT ... FOR UPDATE`. An
+explicit ineligible target stops before diagnosis with an unsupported-statement result; it must not
+produce an optimizer recommendation.
+
 When the default cap finds fewer than 10 candidates, `requested_top_n` and `effective_top_n` equal
 the available selected count; retain `top_n_source: default` and `top_n_cap: 10`. Do not create
 placeholder cases to reach the cap.
@@ -249,6 +254,13 @@ Every optimizer candidate plan-validation result must answer:
 All three values must be `true` before Binding or TiFlash/MPP SQL may appear in the final
 `Review-only SQL` field or any optimizer recommendation may be marked `plan_verified`.
 
+A plan-changing `plan_verified` result must also retain a material semantic delta. Do not compare
+only operator names or tree shape. The same tree may be materially better when access conditions,
+range bounds, residual filters, lookup behavior, pruning, pushdown, ordering, join semantics, or
+task/store placement improves. Operator-ID, plan-digest, `estRows`, or estimated-cost changes alone
+are insufficient. The delta must address the diagnosed mechanism and record concrete before/after
+values.
+
 Every retained `result.json` must record plan validation and runtime evidence separately:
 
 ```json
@@ -277,7 +289,15 @@ For `validation_level: plan_verified`, retain this compact shape in `result.json
     "baseline_matches_expected_shape": false,
     "syntax_accepted": true,
     "optimizer_selected_expected_path": true,
-    "plan_shape_matches_diagnosis": true
+    "plan_shape_matches_diagnosis": true,
+    "semantic_delta": {
+      "material": true,
+      "addresses_diagnosed_mechanism": true,
+      "changed_fields": ["access_conditions", "access_range"],
+      "before": "<concrete baseline values>",
+      "after": "<concrete candidate values>",
+      "summary": "<why the delta addresses the diagnosed mechanism>"
+    }
   }
 }
 ```
@@ -360,6 +380,7 @@ manifest should point to that artifact instead of copying all details.
 - baseline plan path;
 - candidate plan path;
 - one concise comparison summary;
+- a concrete material semantic delta for every passing plan-changing candidate;
 - comparison artifact path;
 - exact blocker when validation cannot run.
 

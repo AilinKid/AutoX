@@ -455,6 +455,32 @@ For every candidate with baseline and candidate plans, compare:
 - estimated rows and cost;
 - whether the expected plan change occurred.
 
+Do not reduce this comparison to operator names or tree shape. An unchanged tree can still contain
+a material semantic improvement, such as more predicates becoming `IndexRangeScan` access
+conditions, a narrower range, fewer residual filters or table lookups, better pruning or pushdown,
+or improved ordering, join semantics, task/store placement, or data movement. Operator-ID,
+plan-digest, `estRows`, or estimated-cost changes alone are not material.
+
+For every passing plan-changing candidate, record:
+
+```json
+{
+  "semantic_delta": {
+    "material": true,
+    "addresses_diagnosed_mechanism": true,
+    "changed_fields": ["access_conditions", "access_range"],
+    "before": "<concrete baseline values>",
+    "after": "<concrete candidate values>",
+    "summary": "<why this semantic change fixes the diagnosed mechanism>"
+  }
+}
+```
+
+If no material semantic delta addresses the diagnosed mechanism, set
+`plan_shape_matches_diagnosis: false` and reject the candidate. Do not publish a plan-changing
+recommendation. The same operator tree is allowed when the recorded semantic fields materially
+improve.
+
 Record the three validation answers explicitly:
 
 ```json
@@ -527,6 +553,14 @@ Return this validation result directly. Optionally write or update run-local `ma
         "syntax_accepted": false,
         "optimizer_selected_expected_path": false,
         "plan_shape_matches_diagnosis": false,
+        "semantic_delta": {
+          "material": false,
+          "addresses_diagnosed_mechanism": false,
+          "changed_fields": [],
+          "before": "",
+          "after": "",
+          "summary": ""
+        },
         "baseline_plan_path": "",
         "candidate_plan_path": "",
         "comparison_summary": "",
