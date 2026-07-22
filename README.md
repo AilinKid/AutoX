@@ -125,6 +125,7 @@ paths defined by the Skill. The `Report` column is illustrative here; generated 
 link every row to its own focused report.
 
 > ### AutoX Slow SQL Batch Report
+> 
 > #### Batch
 > - Status: `completed`
 > - Scope: global Top 10 across all accessible active Dedicated clusters
